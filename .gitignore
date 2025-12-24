@@ -1,0 +1,36 @@
+# Compiled output
+out/
+dist/
+
+# Node modules
+node_modules/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# VS Code extension package
+*.vsix
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE specific
+.idea/
+
+# Session data (optional - remove if you want to track sessions)
+.codetrace/
+sessions/
+*.session.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment variables
+.env
+.env.local
+
+# Test coverage
+coverage/
+

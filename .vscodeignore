@@ -1,0 +1,30 @@
+# Files to exclude when packaging the extension
+
+# Source files (only include compiled output)
+src/
+tests/
+
+# Config files
+.vscode/
+.gitignore
+.eslintrc.json
+tsconfig.json
+*.map
+
+# Development files
+node_modules/
+**/*.ts
+!out/**/*.js
+
+# Documentation that's not needed
+CHANGELOG.md
+CONTRIBUTING.md
+
+# Test files
+**/test/**
+**/*.test.js
+
+# Git
+.git/
+.gitkeep
+
