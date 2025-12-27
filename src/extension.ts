@@ -1,24 +1,24 @@
 /**
- * CodeTrace Extension
+ * CodeTrace - Smart Coding Session Recorder
  * 
- * This is the main entry point for the CodeTrace VS Code extension.
- * It handles recording coding sessions by tracking file saves and git commits.
+ * Hey! This is my VS Code extension that records your coding sessions.
+ * I built this because I wanted a way to track what I work on and
+ * get AI-powered insights about my coding patterns.
  * 
- * Key Components:
- * - activate(): Called when the extension is first activated
- * - deactivate(): Called when the extension is deactivated
- * - RecordingManager: Class that manages the recording state, file tracking, and storage
- * - GitTracker: Class that handles git repository detection and commit tracking
+ * Main features:
+ * - Records file saves with timestamps and content snapshots
+ * - Tracks git commits made during sessions
+ * - Generates AI summaries using OpenAI
+ * - Exports sessions as markdown reports
  * 
- * VS Code Workspace API Used:
- * - workspace.onDidSaveTextDocument: Fires when a text document is saved
- * - workspace.workspaceFolders: Gets the workspace folder paths
- * - workspace.fs: File system API for reading/writing files
+ * The architecture is pretty simple:
+ * - RecordingManager handles all the recording logic
+ * - GitTracker monitors git commits using simple-git
+ * - AIService generates summaries via OpenAI API
+ * - SessionTimelinePanel renders the webview UI
  * 
- * Git Tracking:
- * - Uses simple-git npm package for git operations
- * - Detects if workspace is a git repository
- * - Polls for new commits during recording session
+ * @author Faozia Abedin
+ * @license MIT
  */
 
 import * as vscode from 'vscode';
@@ -28,75 +28,62 @@ import { SessionTimelinePanel } from './SessionTimelinePanel';
 import { AIService, SessionSummary } from './AIService';
 
 // ============================================================================
-// TYPES & INTERFACES
+// TYPE DEFINITIONS
+// I like keeping these at the top so it's easy to see the data structures
 // ============================================================================
 
 /**
- * Represents a single file change event during a recording session.
+ * Represents a single file change - basically a snapshot of a file at a moment in time.
+ * I store the full content because I want to be able to see exactly what changed.
  */
 interface FileChange {
-    /** Relative path to the file from workspace root */
-    file: string;
-    /** ISO timestamp when the file was saved */
-    timestamp: string;
-    /** Complete file content at the time of save */
-    content: string;
+    file: string;       // relative path from workspace root
+    timestamp: string;  // ISO format - makes sorting easy
+    content: string;    // full file content at save time
 }
 
 /**
- * Represents a git commit tracked during the session.
+ * Git commit info - keeping it simple with just the essentials
  */
 interface CommitInfo {
-    /** The commit hash (full SHA) */
     hash: string;
-    /** The commit message */
     message: string;
-    /** The author's name */
     author: string;
-    /** ISO timestamp of the commit */
     timestamp: string;
 }
 
 /**
- * Session statistics calculated at the end of recording.
+ * Stats calculated at the end of a session - useful for quick overviews
  */
 interface SessionStats {
-    /** Number of unique files that were changed */
     filesChanged: number;
-    /** Number of commits made during the session */
     commitsCount: number;
-    /** Duration of the session in minutes */
-    duration: string;
+    duration: string;  // in minutes
 }
 
 /**
- * Represents a complete recording session with all tracked data.
+ * The main session object - this is what gets saved to JSON
+ * I tried to keep it flat and simple to make it easy to work with
  */
 interface SessionData {
-    /** Unique identifier for the session (UUID format) */
     sessionId: string;
-    /** When the recording started (ISO timestamp) */
     startTime: string;
-    /** When the recording ended (ISO timestamp) */
     endTime?: string;
-    /** Name of the git repository (if available) */
     repository?: string;
-    /** Array of all file changes recorded during this session */
     changes: FileChange[];
-    /** Array of all commits made during this session */
     commits: CommitInfo[];
-    /** Statistics about the session */
     stats?: SessionStats;
-    /** AI-generated summary of the session */
     summary?: SessionSummary;
 }
 
 // ============================================================================
 // UTILITY FUNCTIONS
+// Small helper functions that I use throughout the extension
 // ============================================================================
 
 /**
- * Generates a UUID v4 for session identification.
+ * Generates a UUID - I'm using the simple approach here since we don't need
+ * cryptographic randomness, just unique IDs for sessions
  */
 function generateUUID(): string {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -107,277 +94,245 @@ function generateUUID(): string {
 }
 
 /**
- * Gets the workspace root folder URI.
+ * Gets the first workspace folder - for now I'm only supporting single-root workspaces
+ * Multi-root support could be added later if needed
  */
 function getWorkspaceRoot(): vscode.Uri | undefined {
     const folders = vscode.workspace.workspaceFolders;
-    if (folders && folders.length > 0) {
-        return folders[0].uri;
-    }
-    return undefined;
+    return folders && folders.length > 0 ? folders[0].uri : undefined;
 }
 
 /**
- * Converts an absolute file path to a path relative to the workspace root.
+ * Converts absolute paths to relative - makes the data more portable
+ * and easier to read in the UI
  */
 function getRelativePath(absolutePath: string): string {
     const workspaceRoot = getWorkspaceRoot();
     if (workspaceRoot) {
         const relativePath = path.relative(workspaceRoot.fsPath, absolutePath);
-        return relativePath.replace(/\\/g, '/');
+        return relativePath.replace(/\\/g, '/'); // normalize for Windows
     }
     return absolutePath;
 }
 
 /**
- * Calculates duration between two ISO timestamps in minutes.
+ * Simple duration calculator - returns minutes as a string
  */
 function calculateDuration(startTime: string, endTime: string): string {
     const start = new Date(startTime).getTime();
     const end = new Date(endTime).getTime();
-    const durationMs = end - start;
-    const minutes = Math.round(durationMs / 60000);
+    const minutes = Math.round((end - start) / 60000);
     return `${minutes}`;
+}
+
+/**
+ * Checks if a file should be ignored based on user settings
+ * Uses minimatch-style glob patterns
+ */
+function shouldIgnoreFile(filePath: string): boolean {
+    const config = vscode.workspace.getConfiguration('codetrace');
+    const ignorePatterns = config.get<string[]>('ignorePatterns') || [];
+    
+    // Simple glob matching - checks if path contains any of the patterns
+    for (const pattern of ignorePatterns) {
+        // Handle ** patterns
+        const regexPattern = pattern
+            .replace(/\*\*/g, '.*')
+            .replace(/\*/g, '[^/]*')
+            .replace(/\./g, '\\.');
+        
+        if (new RegExp(regexPattern).test(filePath)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Shows a notification only if enabled in settings
+ * I added this because some people find notifications annoying
+ */
+function showNotification(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
+    const config = vscode.workspace.getConfiguration('codetrace');
+    if (!config.get<boolean>('showNotifications')) {
+        return;
+    }
+    
+    switch (type) {
+        case 'warning':
+            vscode.window.showWarningMessage(message);
+            break;
+        case 'error':
+            vscode.window.showErrorMessage(message);
+            break;
+        default:
+            vscode.window.showInformationMessage(message);
+    }
 }
 
 // ============================================================================
 // GIT TRACKER CLASS
+// Handles all the git-related stuff using simple-git library
 // ============================================================================
 
-/**
- * GitTracker handles all git-related operations:
- * - Detecting if workspace is a git repository
- * - Getting repository name
- * - Tracking commits made during recording
- * 
- * Uses simple-git package for git operations.
- * simple-git is a lightweight wrapper around git CLI commands.
- */
 class GitTracker {
-    // SimpleGit instance for executing git commands
     private git: SimpleGit | null = null;
-    
-    // Whether the workspace is a valid git repository
     private isGitRepo: boolean = false;
-    
-    // The repository name (extracted from remote URL or folder name)
     private repoName: string = '';
-    
-    // Hash of the last commit seen (to detect new commits)
     private lastSeenCommitHash: string = '';
-    
-    // Timer for polling new commits
     private pollInterval: NodeJS.Timeout | null = null;
-    
-    // Callback to invoke when new commits are detected
     private onCommitCallback: ((commit: CommitInfo) => void) | null = null;
 
     /**
-     * Initializes the git tracker for a workspace.
-     * Checks if git is available and if the workspace is a repository.
-     * 
-     * @param workspacePath - Path to the workspace folder
-     * @returns true if git is available and workspace is a git repo
+     * Initializes git tracking for the workspace
+     * Returns false if git isn't available or it's not a repo
      */
     async initialize(workspacePath: string): Promise<boolean> {
         try {
-            // Create a simple-git instance for the workspace
-            // baseDir: The directory to run git commands in
-            // binary: 'git' - use system git installation
-            // maxConcurrentProcesses: 1 - avoid race conditions
+            // Set up simple-git with our workspace
             this.git = simpleGit({
                 baseDir: workspacePath,
                 binary: 'git',
                 maxConcurrentProcesses: 1,
-                // Trim whitespace from command output
                 trimmed: true
             });
 
-            // Check if this is a git repository by running 'git rev-parse'
-            // This command fails in non-git directories
+            // Check if this is actually a git repo
             const isRepo = await this.git.checkIsRepo();
-            
             if (!isRepo) {
-                console.log('CodeTrace: Workspace is not a git repository');
+                console.log('CodeTrace: Not a git repository - git tracking disabled');
                 this.isGitRepo = false;
                 return false;
             }
 
             this.isGitRepo = true;
-
-            // Get the repository name from remote URL or folder name
             await this.fetchRepoName(workspacePath);
-
-            // Get the most recent commit hash as our starting point
             await this.fetchLastCommitHash();
 
-            console.log('CodeTrace: Git tracking initialized', {
-                repository: this.repoName,
-                lastCommit: this.lastSeenCommitHash.substring(0, 7)
-            });
-
+            console.log(`CodeTrace: Git initialized for ${this.repoName}`);
             return true;
 
         } catch (error) {
-            // Git might not be installed or accessible
-            console.log('CodeTrace: Git not available or error initializing', error);
+            // Git probably isn't installed - that's okay, we just won't track commits
+            console.log('CodeTrace: Git not available:', error);
             this.isGitRepo = false;
             return false;
         }
     }
 
     /**
-     * Fetches the repository name from the remote URL or uses folder name.
+     * Gets the repo name from the remote URL or falls back to folder name
      */
     private async fetchRepoName(workspacePath: string): Promise<void> {
         if (!this.git) return;
 
         try {
-            // Try to get the remote URL (usually 'origin')
             const remotes = await this.git.getRemotes(true);
             const origin = remotes.find(r => r.name === 'origin');
             
-            if (origin && origin.refs.fetch) {
-                // Extract repo name from URL
-                // Examples:
-                // - https://github.com/user/repo.git -> repo
-                // - git@github.com:user/repo.git -> repo
-                const url = origin.refs.fetch;
-                const match = url.match(/\/([^/]+?)(\.git)?$/);
+            if (origin?.refs.fetch) {
+                // Extract repo name from URL like github.com/user/repo.git
+                const match = origin.refs.fetch.match(/\/([^/]+?)(\.git)?$/);
                 if (match) {
                     this.repoName = match[1];
                     return;
                 }
             }
         } catch (error) {
-            console.log('CodeTrace: Could not get remote URL', error);
+            console.log('CodeTrace: Could not get remote URL');
         }
 
-        // Fallback: use folder name
+        // Fallback to folder name
         this.repoName = path.basename(workspacePath);
     }
 
     /**
-     * Fetches the hash of the most recent commit.
+     * Gets the latest commit hash so we know where to start tracking from
      */
     private async fetchLastCommitHash(): Promise<void> {
         if (!this.git) return;
 
         try {
-            // Get the latest commit log (just 1 entry)
             const log = await this.git.log({ maxCount: 1 });
             if (log.latest) {
                 this.lastSeenCommitHash = log.latest.hash;
             }
-        } catch (error) {
-            // No commits yet in the repository
-            console.log('CodeTrace: No commits found in repository');
+        } catch {
+            // No commits yet - that's fine
             this.lastSeenCommitHash = '';
         }
     }
 
     /**
-     * Starts polling for new commits.
-     * Checks every 5 seconds for commits newer than the last seen.
-     * 
-     * @param onCommit - Callback function invoked when a new commit is detected
+     * Starts polling for new commits every 5 seconds
+     * I chose polling because it's simpler than watching .git/refs
      */
     startTracking(onCommit: (commit: CommitInfo) => void): void {
-        if (!this.isGitRepo || !this.git) {
-            return;
-        }
+        if (!this.isGitRepo || !this.git) return;
 
         this.onCommitCallback = onCommit;
-
-        // Poll for new commits every 5 seconds
-        // This is a simple approach; alternatives include:
-        // - File system watcher on .git/refs/heads
-        // - Git hooks (requires setup in the repo)
         this.pollInterval = setInterval(async () => {
             await this.checkForNewCommits();
         }, 5000);
 
-        console.log('CodeTrace: Started git commit tracking');
+        console.log('CodeTrace: Git tracking started');
     }
 
     /**
-     * Checks for commits made since the last seen commit.
+     * Checks for commits made since we last looked
      */
     private async checkForNewCommits(): Promise<void> {
         if (!this.git || !this.onCommitCallback) return;
 
         try {
-            // Get recent commits (last 10 to catch any we might have missed)
             const log: LogResult = await this.git.log({ maxCount: 10 });
-
-            // Find any commits newer than our last seen
             const newCommits: CommitInfo[] = [];
             
+            // Find commits we haven't seen yet
             for (const commit of log.all) {
-                // Stop when we reach the last commit we've seen
-                if (commit.hash === this.lastSeenCommitHash) {
-                    break;
-                }
-
-                // This is a new commit
+                if (commit.hash === this.lastSeenCommitHash) break;
+                
                 newCommits.push({
                     hash: commit.hash,
                     message: commit.message,
                     author: commit.author_name,
-                    // Convert git date to ISO format
                     timestamp: new Date(commit.date).toISOString()
                 });
             }
 
-            // Process new commits (oldest first)
+            // Process in chronological order (oldest first)
             newCommits.reverse();
             for (const commit of newCommits) {
-                console.log('CodeTrace: New commit detected', {
-                    hash: commit.hash.substring(0, 7),
-                    message: commit.message.substring(0, 50)
-                });
+                console.log(`CodeTrace: New commit detected - ${commit.hash.substring(0, 7)}`);
                 this.onCommitCallback(commit);
             }
 
-            // Update last seen hash
+            // Update our checkpoint
             if (log.latest) {
                 this.lastSeenCommitHash = log.latest.hash;
             }
 
         } catch (error) {
-            console.error('CodeTrace: Error checking for new commits', error);
+            console.error('CodeTrace: Error checking for commits:', error);
         }
     }
 
-    /**
-     * Stops tracking commits.
-     */
     stopTracking(): void {
         if (this.pollInterval) {
             clearInterval(this.pollInterval);
             this.pollInterval = null;
         }
         this.onCommitCallback = null;
-        console.log('CodeTrace: Stopped git commit tracking');
     }
 
-    /**
-     * Returns whether git tracking is available.
-     */
     isAvailable(): boolean {
         return this.isGitRepo;
     }
 
-    /**
-     * Returns the repository name.
-     */
     getRepoName(): string {
         return this.repoName;
     }
 
-    /**
-     * Cleans up resources.
-     */
     dispose(): void {
         this.stopTracking();
         this.git = null;
@@ -386,68 +341,44 @@ class GitTracker {
 
 // ============================================================================
 // RECORDING MANAGER CLASS
+// This is the heart of the extension - manages the whole recording lifecycle
 // ============================================================================
 
-/**
- * RecordingManager handles all recording-related functionality:
- * - Starting and stopping recording sessions
- * - Managing the status bar indicator
- * - Listening to file save events
- * - Coordinating with GitTracker for commit tracking
- * - Saving session data to JSON files
- */
 class RecordingManager {
-    // Status bar item showing recording state and file count
     private statusBarItem: vscode.StatusBarItem;
-    
-    // Current recording state
     private isRecording: boolean = false;
-    
-    // The current active session data
     private currentSession: SessionData | null = null;
-    
-    // Disposable for the document save listener
     private saveListener: vscode.Disposable | null = null;
-    
-    // Git tracker for commit monitoring
     private gitTracker: GitTracker;
-    
-    // Count of unique files changed
     private filesChangedCount: number = 0;
-    
-    // Set to track unique file paths
     private uniqueFilesChanged: Set<string> = new Set();
 
     constructor() {
-        // Create status bar item
+        // Create status bar item - I put it on the left with high priority
+        // so it's always visible and easy to click
         this.statusBarItem = vscode.window.createStatusBarItem(
             vscode.StatusBarAlignment.Left,
             100
         );
         
-        // Create git tracker instance
         this.gitTracker = new GitTracker();
-        
-        // Set initial state
         this.updateStatusBar();
         this.statusBarItem.show();
     }
 
     /**
-     * Updates the status bar text and appearance based on recording state.
+     * Updates the status bar with current recording state
+     * Shows file and commit counts when recording
      */
     private updateStatusBar(): void {
         if (this.isRecording) {
             const commitCount = this.currentSession?.commits.length || 0;
-            // Show files and commits count
-            this.statusBarItem.text = `$(record) CodeTrace: Recording (${this.filesChangedCount} files, ${commitCount} commits)`;
-            this.statusBarItem.backgroundColor = new vscode.ThemeColor(
-                'statusBarItem.warningBackground'
-            );
-            this.statusBarItem.tooltip = `Recording session\n${this.filesChangedCount} unique files changed\n${commitCount} commits tracked\nClick to stop`;
+            this.statusBarItem.text = `$(record) Recording (${this.filesChangedCount} files, ${commitCount} commits)`;
+            this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+            this.statusBarItem.tooltip = 'Click to stop recording';
             this.statusBarItem.command = 'codetrace.stopRecording';
         } else {
-            this.statusBarItem.text = '$(circle-outline) CodeTrace: Stopped';
+            this.statusBarItem.text = '$(circle-outline) CodeTrace';
             this.statusBarItem.backgroundColor = undefined;
             this.statusBarItem.tooltip = 'Click to start recording';
             this.statusBarItem.command = 'codetrace.startRecording';
@@ -455,23 +386,22 @@ class RecordingManager {
     }
 
     /**
-     * Starts a new recording session.
+     * Starts a new recording session
+     * Sets up file watchers and git tracking
      */
     public async startRecording(): Promise<void> {
         if (this.isRecording) {
-            vscode.window.showWarningMessage('CodeTrace: Already recording!');
+            showNotification('Already recording!', 'warning');
             return;
         }
 
         const workspaceRoot = getWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage(
-                'CodeTrace: Please open a workspace folder before recording.'
-            );
+            showNotification('Please open a folder before recording', 'error');
             return;
         }
 
-        // Initialize git tracking (will gracefully handle non-git repos)
+        // Initialize git tracking (okay if it fails)
         const gitAvailable = await this.gitTracker.initialize(workspaceRoot.fsPath);
 
         // Create new session
@@ -486,42 +416,27 @@ class RecordingManager {
         // Reset counters
         this.filesChangedCount = 0;
         this.uniqueFilesChanged.clear();
-
-        // Set recording state
         this.isRecording = true;
-        
-        // Set up file save listener
+
+        // Set up listeners
         this.setupSaveListener();
         
-        // Start git tracking if available
         if (gitAvailable) {
-            this.gitTracker.startTracking((commit) => {
-                this.recordCommit(commit);
-            });
+            this.gitTracker.startTracking((commit) => this.recordCommit(commit));
         }
         
-        // Update status bar
+        // Update context for keybinding conditions
+        vscode.commands.executeCommand('setContext', 'codetrace.isRecording', true);
+        
         this.updateStatusBar();
 
-        console.log('CodeTrace: Recording started', {
-            sessionId: this.currentSession.sessionId,
-            startTime: this.currentSession.startTime,
-            gitEnabled: gitAvailable,
-            repository: this.currentSession.repository
-        });
-
-        // Build info message
-        let message = `CodeTrace: Recording started`;
-        if (gitAvailable) {
-            message += ` (Git: ${this.gitTracker.getRepoName()})`;
-        } else {
-            message += ' (Git tracking not available)';
-        }
-        vscode.window.showInformationMessage(message);
+        console.log(`CodeTrace: Recording started - Session ${this.currentSession.sessionId}`);
+        showNotification(`Recording started${gitAvailable ? ` (Git: ${this.gitTracker.getRepoName()})` : ''}`);
     }
 
     /**
-     * Sets up the file save listener.
+     * Listens for file saves using VS Code's workspace API
+     * This is more reliable than file system watchers
      */
     private setupSaveListener(): void {
         this.saveListener = vscode.workspace.onDidSaveTextDocument(
@@ -532,80 +447,66 @@ class RecordingManager {
     }
 
     /**
-     * Records a file save event to the current session.
+     * Records a file save to the current session
+     * Includes full content snapshot for later review
      */
     private async recordFileSave(document: vscode.TextDocument): Promise<void> {
-        if (!this.currentSession || !this.isRecording) {
-            return;
-        }
+        if (!this.currentSession || !this.isRecording) return;
 
         try {
             const absolutePath = document.uri.fsPath;
             const relativePath = getRelativePath(absolutePath);
 
-            // Skip .codetrace folder
-            if (relativePath.startsWith('.codetrace')) {
+            // Skip ignored files
+            if (shouldIgnoreFile(relativePath)) {
                 return;
             }
 
             const content = document.getText();
 
-            const fileChange: FileChange = {
+            this.currentSession.changes.push({
                 file: relativePath,
                 timestamp: new Date().toISOString(),
                 content: content
-            };
+            });
 
-            this.currentSession.changes.push(fileChange);
-
-            // Update unique files count
+            // Track unique files for the status bar
             if (!this.uniqueFilesChanged.has(relativePath)) {
                 this.uniqueFilesChanged.add(relativePath);
                 this.filesChangedCount = this.uniqueFilesChanged.size;
                 this.updateStatusBar();
             }
 
-            console.log('CodeTrace: File save recorded', {
-                file: relativePath,
-                timestamp: fileChange.timestamp
-            });
+            console.log(`CodeTrace: Recorded save - ${relativePath}`);
 
         } catch (error) {
-            console.error('CodeTrace: Error recording file save', error);
+            console.error('CodeTrace: Error recording file save:', error);
         }
     }
 
     /**
-     * Records a git commit to the current session.
-     * Called by GitTracker when a new commit is detected.
+     * Records a git commit to the session
      */
     private recordCommit(commit: CommitInfo): void {
-        if (!this.currentSession || !this.isRecording) {
-            return;
-        }
-
+        if (!this.currentSession || !this.isRecording) return;
+        
         this.currentSession.commits.push(commit);
         this.updateStatusBar();
-
-        console.log('CodeTrace: Commit recorded', {
-            hash: commit.hash.substring(0, 7),
-            message: commit.message.substring(0, 50)
-        });
+        console.log(`CodeTrace: Recorded commit - ${commit.hash.substring(0, 7)}`);
     }
 
     /**
-     * Stops the current recording session.
+     * Stops recording and saves the session
+     * Optionally generates an AI summary if enabled
      */
     public async stopRecording(): Promise<void> {
         if (!this.isRecording) {
-            vscode.window.showWarningMessage('CodeTrace: Not currently recording!');
+            showNotification('Not currently recording', 'warning');
             return;
         }
 
-        // Stop git tracking
+        // Clean up listeners
         this.gitTracker.stopTracking();
-
-        // Clean up save listener
         if (this.saveListener) {
             this.saveListener.dispose();
             this.saveListener = null;
@@ -614,33 +515,27 @@ class RecordingManager {
         // Finalize session
         if (this.currentSession) {
             this.currentSession.endTime = new Date().toISOString();
-            
-            // Calculate stats
             this.currentSession.stats = {
                 filesChanged: this.filesChangedCount,
                 commitsCount: this.currentSession.commits.length,
-                duration: calculateDuration(
-                    this.currentSession.startTime,
-                    this.currentSession.endTime
-                )
+                duration: calculateDuration(this.currentSession.startTime, this.currentSession.endTime)
             };
 
             // Save to file
             const saved = await this.saveSessionToFile();
 
-            console.log('CodeTrace: Recording stopped', {
-                sessionId: this.currentSession.sessionId,
-                stats: this.currentSession.stats
-            });
+            console.log(`CodeTrace: Recording stopped - ${this.filesChangedCount} files, ${this.currentSession.commits.length} commits`);
 
             if (saved) {
-                vscode.window.showInformationMessage(
-                    `CodeTrace: Recording stopped. ${this.filesChangedCount} files, ${this.currentSession.commits.length} commits, ${this.currentSession.stats.duration} minutes.`
+                showNotification(
+                    `Recording saved! ${this.filesChangedCount} files, ${this.currentSession.commits.length} commits, ${this.currentSession.stats.duration} min`
                 );
-            } else {
-                vscode.window.showWarningMessage(
-                    `CodeTrace: Recording stopped but failed to save session file.`
-                );
+
+                // Auto-generate summary if enabled
+                const config = vscode.workspace.getConfiguration('codetrace');
+                if (config.get<boolean>('autoGenerateSummary')) {
+                    vscode.commands.executeCommand('codetrace.generateSummary');
+                }
             }
         }
 
@@ -650,101 +545,109 @@ class RecordingManager {
         this.filesChangedCount = 0;
         this.uniqueFilesChanged.clear();
         
+        vscode.commands.executeCommand('setContext', 'codetrace.isRecording', false);
         this.updateStatusBar();
     }
 
     /**
-     * Saves the current session data to a JSON file.
+     * Saves session data to a JSON file in .codetrace folder
      */
     private async saveSessionToFile(): Promise<boolean> {
-        if (!this.currentSession) {
-            return false;
-        }
+        if (!this.currentSession) return false;
 
         const workspaceRoot = getWorkspaceRoot();
-        if (!workspaceRoot) {
-            console.error('CodeTrace: No workspace root found');
-            return false;
-        }
+        if (!workspaceRoot) return false;
 
         try {
-            // Create .codetrace directory
             const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
             
+            // Create directory if needed
             try {
                 await vscode.workspace.fs.createDirectory(codetraceDir);
             } catch {
-                // Directory might already exist
+                // Directory exists - that's fine
             }
 
-            // Generate filename with timestamp
+            // Clean up old sessions if we have too many
+            await this.cleanupOldSessions(codetraceDir);
+
+            // Generate filename from timestamp
             const timestamp = this.currentSession.startTime
                 .replace(/:/g, '-')
                 .replace(/\./g, '-');
             const filename = `session-${timestamp}.json`;
             const filePath = vscode.Uri.joinPath(codetraceDir, filename);
 
-            // Write JSON file
+            // Write the file
             const jsonContent = JSON.stringify(this.currentSession, null, 2);
             const encoder = new TextEncoder();
             await vscode.workspace.fs.writeFile(filePath, encoder.encode(jsonContent));
 
-            console.log('CodeTrace: Session saved to', filePath.fsPath);
+            console.log(`CodeTrace: Session saved to ${filename}`);
             return true;
 
         } catch (error) {
-            console.error('CodeTrace: Error saving session file', error);
-            if (error instanceof Error) {
-                vscode.window.showErrorMessage(
-                    `CodeTrace: Failed to save session: ${error.message}`
-                );
-            }
+            console.error('CodeTrace: Error saving session:', error);
+            showNotification('Failed to save session', 'error');
             return false;
         }
     }
 
     /**
-     * Shows session stats in a quick pick menu.
-     * Displays current or last session information.
+     * Removes old sessions if we have more than the configured limit
      */
-    public async showSessionStats(): Promise<void> {
-        const session = this.currentSession;
+    private async cleanupOldSessions(codetraceDir: vscode.Uri): Promise<void> {
+        try {
+            const config = vscode.workspace.getConfiguration('codetrace');
+            const maxSessions = config.get<number>('maxSessionsToKeep') || 50;
 
-        if (!session) {
-            // Try to load the most recent session from files
-            const recentSession = await this.loadMostRecentSession();
-            if (recentSession) {
-                await this.displaySessionStats(recentSession, false);
-            } else {
-                vscode.window.showInformationMessage(
-                    'CodeTrace: No active session and no previous sessions found.'
-                );
+            const files = await vscode.workspace.fs.readDirectory(codetraceDir);
+            const sessionFiles = files
+                .filter(([name, type]) => 
+                    type === vscode.FileType.File && 
+                    name.startsWith('session-') && 
+                    name.endsWith('.json')
+                )
+                .map(([name]) => name)
+                .sort();
+
+            // Delete oldest files if we're over the limit
+            while (sessionFiles.length >= maxSessions) {
+                const oldest = sessionFiles.shift();
+                if (oldest) {
+                    const filePath = vscode.Uri.joinPath(codetraceDir, oldest);
+                    await vscode.workspace.fs.delete(filePath);
+                    console.log(`CodeTrace: Deleted old session ${oldest}`);
+                }
             }
-            return;
+        } catch (error) {
+            console.error('CodeTrace: Error cleaning up old sessions:', error);
         }
-
-        await this.displaySessionStats(session, true);
     }
 
     /**
-     * Displays session stats in a quick pick menu.
+     * Shows quick stats for current or recent session
      */
+    public async showSessionStats(): Promise<void> {
+        const session = this.currentSession || await this.loadMostRecentSession();
+
+        if (!session) {
+            showNotification('No sessions found. Start recording first!');
+            return;
+        }
+
+        await this.displaySessionStats(session, !!this.currentSession);
+    }
+
     private async displaySessionStats(session: SessionData, isActive: boolean): Promise<void> {
-        // Calculate duration
         const endTime = session.endTime || new Date().toISOString();
         const duration = calculateDuration(session.startTime, endTime);
 
-        // Build quick pick items
         const items: vscode.QuickPickItem[] = [
             {
                 label: '$(info) Session Info',
                 description: `ID: ${session.sessionId.substring(0, 8)}...`,
-                detail: isActive ? '🔴 Currently Recording' : '⏹️ Completed'
-            },
-            {
-                label: '$(repo) Repository',
-                description: session.repository || 'Not a git repository',
-                detail: session.repository ? 'Git tracking enabled' : 'Git tracking disabled'
+                detail: isActive ? '🔴 Currently Recording' : '✅ Completed'
             },
             {
                 label: '$(clock) Duration',
@@ -758,73 +661,35 @@ class RecordingManager {
             },
             {
                 label: '$(git-commit) Commits',
-                description: `${session.commits.length} commits tracked`,
+                description: `${session.commits.length} commits`,
                 detail: session.commits.length > 0 
                     ? `Latest: ${session.commits[session.commits.length - 1]?.message.substring(0, 40)}...`
-                    : 'No commits during this session'
+                    : 'No commits in this session'
             }
         ];
 
-        // Add recent files section
-        if (session.changes.length > 0) {
+        if (session.summary) {
             items.push({
-                label: '$(list-tree) Recent Files',
-                kind: vscode.QuickPickItemKind.Separator
-            } as vscode.QuickPickItem);
-
-            // Get last 5 unique files
-            const recentFiles = [...new Set(session.changes.slice(-10).map(c => c.file))].slice(-5);
-            for (const file of recentFiles) {
-                items.push({
-                    label: `    $(file-code) ${path.basename(file)}`,
-                    description: path.dirname(file),
-                    detail: ''
-                });
-            }
+                label: '$(sparkle) AI Summary',
+                description: session.summary.suggestedTitle,
+                detail: session.summary.whatWasBuilt.substring(0, 80) + '...'
+            });
         }
 
-        // Add recent commits section
-        if (session.commits.length > 0) {
-            items.push({
-                label: '$(git-commit) Recent Commits',
-                kind: vscode.QuickPickItemKind.Separator
-            } as vscode.QuickPickItem);
-
-            // Get last 3 commits
-            const recentCommits = session.commits.slice(-3);
-            for (const commit of recentCommits) {
-                items.push({
-                    label: `    $(git-commit) ${commit.hash.substring(0, 7)}`,
-                    description: commit.message.substring(0, 50),
-                    detail: `by ${commit.author}`
-                });
-            }
-        }
-
-        // Show the quick pick
         await vscode.window.showQuickPick(items, {
-            title: isActive ? 'CodeTrace: Current Session Stats' : 'CodeTrace: Last Session Stats',
-            placeHolder: 'Session information',
-            canPickMany: false
+            title: isActive ? 'Current Session' : 'Last Session',
+            placeHolder: 'Session statistics'
         });
     }
 
-    /**
-     * Loads the most recent session from the .codetrace folder.
-     */
     private async loadMostRecentSession(): Promise<SessionData | null> {
         const workspaceRoot = getWorkspaceRoot();
-        if (!workspaceRoot) {
-            return null;
-        }
+        if (!workspaceRoot) return null;
 
         try {
             const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
-            
-            // List files in .codetrace directory
             const files = await vscode.workspace.fs.readDirectory(codetraceDir);
             
-            // Filter for session JSON files and sort by name (which includes timestamp)
             const sessionFiles = files
                 .filter(([name, type]) => 
                     type === vscode.FileType.File && 
@@ -835,41 +700,25 @@ class RecordingManager {
                 .sort()
                 .reverse();
 
-            if (sessionFiles.length === 0) {
-                return null;
-            }
+            if (sessionFiles.length === 0) return null;
 
-            // Load the most recent session
-            const mostRecentFile = vscode.Uri.joinPath(codetraceDir, sessionFiles[0]);
-            const data = await vscode.workspace.fs.readFile(mostRecentFile);
-            const decoder = new TextDecoder();
-            const session: SessionData = JSON.parse(decoder.decode(data));
+            const filePath = vscode.Uri.joinPath(codetraceDir, sessionFiles[0]);
+            const data = await vscode.workspace.fs.readFile(filePath);
+            return JSON.parse(new TextDecoder().decode(data));
 
-            return session;
-
-        } catch (error) {
-            console.log('CodeTrace: Could not load recent session', error);
+        } catch {
             return null;
         }
     }
 
-    /**
-     * Returns the current session data.
-     */
     public getCurrentSession(): SessionData | null {
         return this.currentSession;
     }
 
-    /**
-     * Returns whether currently recording.
-     */
     public getIsRecording(): boolean {
         return this.isRecording;
     }
 
-    /**
-     * Cleans up resources.
-     */
     public async dispose(): Promise<void> {
         if (this.isRecording) {
             await this.stopRecording();
@@ -880,67 +729,56 @@ class RecordingManager {
 }
 
 // ============================================================================
-// EXTENSION ACTIVATION
+// MODULE-LEVEL INSTANCES
 // ============================================================================
 
 let recordingManager: RecordingManager;
 let aiService: AIService;
 
-/**
- * Extension activation function.
- */
-export function activate(context: vscode.ExtensionContext): void {
-    console.log('CodeTrace: Extension is now activating...');
+// ============================================================================
+// EXTENSION ACTIVATION
+// This is where everything gets wired up when VS Code loads the extension
+// ============================================================================
 
-    // Create recording manager and AI service
+export function activate(context: vscode.ExtensionContext): void {
+    console.log('CodeTrace: Activating extension...');
+
+    // Initialize our main components
     recordingManager = new RecordingManager();
     aiService = new AIService();
 
-    // Register commands
-    const startCommand = vscode.commands.registerCommand(
-        'codetrace.startRecording',
-        async () => {
-            await recordingManager.startRecording();
-        }
-    );
+    // Register all the commands
+    const commands = [
+        vscode.commands.registerCommand('codetrace.startRecording', () => 
+            recordingManager.startRecording()
+        ),
+        vscode.commands.registerCommand('codetrace.stopRecording', () => 
+            recordingManager.stopRecording()
+        ),
+        vscode.commands.registerCommand('codetrace.viewSessionStats', () => 
+            recordingManager.showSessionStats()
+        ),
+        vscode.commands.registerCommand('codetrace.openTimeline', () => 
+            SessionTimelinePanel.createOrShow(context.extensionUri)
+        ),
+        vscode.commands.registerCommand('codetrace.generateSummary', () => 
+            generateSessionSummary()
+        ),
+        vscode.commands.registerCommand('codetrace.exportMarkdown', () => 
+            exportSessionAsMarkdown()
+        ),
+        vscode.commands.registerCommand('codetrace.deleteSession', () => 
+            deleteSession()
+        ),
+        vscode.commands.registerCommand('codetrace.openSettings', () => 
+            vscode.commands.executeCommand('workbench.action.openSettings', 'codetrace')
+        )
+    ];
 
-    const stopCommand = vscode.commands.registerCommand(
-        'codetrace.stopRecording',
-        async () => {
-            await recordingManager.stopRecording();
-        }
-    );
+    // Add all commands to subscriptions for cleanup
+    commands.forEach(cmd => context.subscriptions.push(cmd));
 
-    // Register the "View Session Stats" command
-    const statsCommand = vscode.commands.registerCommand(
-        'codetrace.viewSessionStats',
-        async () => {
-            await recordingManager.showSessionStats();
-        }
-    );
-
-    // Register the "Open Session Timeline" command
-    const timelineCommand = vscode.commands.registerCommand(
-        'codetrace.openTimeline',
-        () => {
-            SessionTimelinePanel.createOrShow(context.extensionUri);
-        }
-    );
-
-    // Register the "Generate Session Summary" command
-    const summaryCommand = vscode.commands.registerCommand(
-        'codetrace.generateSummary',
-        async () => {
-            await generateSessionSummary(context);
-        }
-    );
-
-    // Add to subscriptions
-    context.subscriptions.push(startCommand);
-    context.subscriptions.push(stopCommand);
-    context.subscriptions.push(statsCommand);
-    context.subscriptions.push(timelineCommand);
-    context.subscriptions.push(summaryCommand);
+    // Cleanup on deactivation
     context.subscriptions.push({
         dispose: async () => {
             await recordingManager.dispose();
@@ -948,101 +786,263 @@ export function activate(context: vscode.ExtensionContext): void {
         }
     });
 
+    // Auto-start recording if enabled
+    const config = vscode.workspace.getConfiguration('codetrace');
+    if (config.get<boolean>('autoRecordOnStart')) {
+        recordingManager.startRecording();
+    }
+
+    // Track anonymous telemetry
+    if (config.get<boolean>('enableTelemetry')) {
+        trackActivation();
+    }
+
     console.log('CodeTrace: Extension activated successfully!');
 }
 
+export function deactivate(): void {
+    console.log('CodeTrace: Deactivating...');
+}
+
+// ============================================================================
+// COMMAND IMPLEMENTATIONS
+// ============================================================================
+
 /**
- * Generate AI summary for a selected session
- * @param _context - Extension context (reserved for future use)
+ * Generates an AI summary for a selected session
  */
-async function generateSessionSummary(_context: vscode.ExtensionContext): Promise<void> {
-    // Load available sessions
+async function generateSessionSummary(): Promise<void> {
     const sessions = await loadAllSessions();
     
     if (sessions.length === 0) {
-        vscode.window.showInformationMessage(
-            'CodeTrace: No recorded sessions found. Start recording first!'
-        );
+        showNotification('No sessions found. Start recording first!');
         return;
     }
 
-    // Let user pick a session
+    // Let user pick which session to summarize
     const items = sessions.map(s => ({
-        label: new Date(s.startTime).toLocaleString(),
-        description: s.summary?.suggestedTitle || `${s.changes.length} changes, ${s.commits.length} commits`,
-        detail: s.summary ? '✨ Has AI Summary' : 'No summary yet',
+        label: s.summary?.suggestedTitle || new Date(s.startTime).toLocaleString(),
+        description: `${s.changes.length} changes, ${s.commits.length} commits`,
+        detail: s.summary ? '✨ Has AI Summary' : 'No summary',
         session: s
     }));
 
     const selected = await vscode.window.showQuickPick(items, {
         title: 'Select Session to Summarize',
-        placeHolder: 'Choose a session to generate AI summary'
+        placeHolder: 'Choose a session'
     });
 
-    if (!selected) {
-        return;
-    }
+    if (!selected) return;
 
     // Check if already has summary
     if (selected.session.summary) {
         const action = await vscode.window.showQuickPick(
-            ['Regenerate Summary', 'View Existing Summary', 'Cancel'],
+            ['Regenerate', 'View Existing', 'Cancel'],
             { placeHolder: 'This session already has a summary' }
         );
         
-        if (action === 'View Existing Summary') {
+        if (action === 'View Existing') {
             showSummary(selected.session.summary);
             return;
         }
-        if (action !== 'Regenerate Summary') {
-            return;
-        }
+        if (action !== 'Regenerate') return;
     }
 
-    // Show loading indicator
+    // Generate with progress indicator
     await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
-        title: 'CodeTrace: Generating AI Summary...',
+        title: 'Generating AI Summary...',
         cancellable: false
     }, async (progress) => {
-        progress.report({ increment: 0, message: 'Analyzing session...' });
+        progress.report({ increment: 30, message: 'Analyzing session...' });
 
-        // Generate summary
         const summary = await aiService.generateSessionSummary(selected.session);
-        
-        if (!summary) {
-            return;
-        }
+        if (!summary) return;
 
-        progress.report({ increment: 50, message: 'Saving summary...' });
+        progress.report({ increment: 60, message: 'Saving...' });
 
-        // Update session with summary
         selected.session.summary = summary;
-        
-        // Save updated session
-        const saved = await saveSessionWithSummary(selected.session);
-        
-        progress.report({ increment: 100, message: 'Done!' });
+        await saveSessionWithSummary(selected.session);
 
-        if (saved) {
-            // Show the generated summary
-            showSummary(summary);
-            
-            vscode.window.showInformationMessage(
-                `CodeTrace: Summary generated! "${summary.suggestedTitle}"`
-            );
-        }
+        progress.report({ increment: 100 });
+        
+        showSummary(summary);
+        showNotification(`Summary: "${summary.suggestedTitle}"`);
     });
 }
 
 /**
- * Load all sessions from .codetrace folder
+ * Exports a session as a markdown report
  */
+async function exportSessionAsMarkdown(): Promise<void> {
+    const sessions = await loadAllSessions();
+    
+    if (sessions.length === 0) {
+        showNotification('No sessions to export');
+        return;
+    }
+
+    const items = sessions.map(s => ({
+        label: s.summary?.suggestedTitle || new Date(s.startTime).toLocaleString(),
+        description: `${s.changes.length} changes, ${s.commits.length} commits`,
+        session: s
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Export Session as Markdown',
+        placeHolder: 'Choose a session'
+    });
+
+    if (!selected) return;
+
+    const markdown = generateMarkdownReport(selected.session);
+
+    // Let user choose where to save
+    const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(`session-report-${selected.session.sessionId.substring(0, 8)}.md`),
+        filters: { 'Markdown': ['md'] }
+    });
+
+    if (uri) {
+        await vscode.workspace.fs.writeFile(uri, new TextEncoder().encode(markdown));
+        showNotification('Report exported!');
+        
+        // Open the exported file
+        const doc = await vscode.workspace.openTextDocument(uri);
+        await vscode.window.showTextDocument(doc);
+    }
+}
+
+/**
+ * Generates a markdown report from session data
+ */
+function generateMarkdownReport(session: SessionData): string {
+    const startDate = new Date(session.startTime);
+    const endDate = session.endTime ? new Date(session.endTime) : new Date();
+    const duration = session.stats?.duration || '?';
+
+    let md = `# Coding Session Report\n\n`;
+    md += `**Date:** ${startDate.toLocaleDateString()}\n`;
+    md += `**Time:** ${startDate.toLocaleTimeString()} - ${endDate.toLocaleTimeString()}\n`;
+    md += `**Duration:** ${duration} minutes\n`;
+    md += `**Repository:** ${session.repository || 'N/A'}\n\n`;
+
+    // AI Summary section
+    if (session.summary) {
+        md += `## 🤖 AI Summary\n\n`;
+        md += `### ${session.summary.suggestedTitle}\n\n`;
+        md += `**What was built:** ${session.summary.whatWasBuilt}\n\n`;
+        md += `**Goal:** ${session.summary.apparentGoal}\n\n`;
+        md += `**Key files:** ${session.summary.keyFilesModified.join(', ')}\n\n`;
+    }
+
+    // Statistics
+    md += `## 📊 Statistics\n\n`;
+    md += `| Metric | Value |\n`;
+    md += `|--------|-------|\n`;
+    md += `| Files Changed | ${session.stats?.filesChanged || session.changes.length} |\n`;
+    md += `| Total Saves | ${session.changes.length} |\n`;
+    md += `| Commits | ${session.commits.length} |\n`;
+    md += `| Duration | ${duration} min |\n\n`;
+
+    // Files changed
+    md += `## 📁 Files Modified\n\n`;
+    const uniqueFiles = [...new Set(session.changes.map(c => c.file))];
+    for (const file of uniqueFiles) {
+        const saveCount = session.changes.filter(c => c.file === file).length;
+        md += `- \`${file}\` (${saveCount} save${saveCount > 1 ? 's' : ''})\n`;
+    }
+    md += '\n';
+
+    // Commits
+    if (session.commits.length > 0) {
+        md += `## 📝 Commits\n\n`;
+        for (const commit of session.commits) {
+            md += `- **${commit.hash.substring(0, 7)}** ${commit.message}\n`;
+            md += `  - Author: ${commit.author}\n`;
+            md += `  - Time: ${new Date(commit.timestamp).toLocaleString()}\n\n`;
+        }
+    }
+
+    // Timeline
+    md += `## ⏱️ Timeline\n\n`;
+    const allEvents = [
+        ...session.changes.map(c => ({ type: 'save', time: c.timestamp, desc: `Saved ${c.file}` })),
+        ...session.commits.map(c => ({ type: 'commit', time: c.timestamp, desc: `Commit: ${c.message}` }))
+    ].sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+
+    for (const event of allEvents.slice(0, 50)) { // Limit to 50 events
+        const time = new Date(event.time).toLocaleTimeString();
+        const icon = event.type === 'commit' ? '📝' : '💾';
+        md += `- ${time} ${icon} ${event.desc}\n`;
+    }
+
+    if (allEvents.length > 50) {
+        md += `\n*...and ${allEvents.length - 50} more events*\n`;
+    }
+
+    md += `\n---\n*Generated by CodeTrace*\n`;
+
+    return md;
+}
+
+/**
+ * Deletes a session with confirmation
+ */
+async function deleteSession(): Promise<void> {
+    const sessions = await loadAllSessions();
+    
+    if (sessions.length === 0) {
+        showNotification('No sessions to delete');
+        return;
+    }
+
+    const items = sessions.map(s => ({
+        label: s.summary?.suggestedTitle || new Date(s.startTime).toLocaleString(),
+        description: `${s.changes.length} changes`,
+        session: s
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Delete Session',
+        placeHolder: 'Select session to delete'
+    });
+
+    if (!selected) return;
+
+    // Confirm deletion
+    const confirm = await vscode.window.showWarningMessage(
+        `Delete session from ${new Date(selected.session.startTime).toLocaleString()}?`,
+        { modal: true },
+        'Delete'
+    );
+
+    if (confirm !== 'Delete') return;
+
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) return;
+
+    try {
+        const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
+        const timestamp = selected.session.startTime.replace(/:/g, '-').replace(/\./g, '-');
+        const filename = `session-${timestamp}.json`;
+        const filePath = vscode.Uri.joinPath(codetraceDir, filename);
+
+        await vscode.workspace.fs.delete(filePath);
+        showNotification('Session deleted');
+
+    } catch (error) {
+        showNotification('Failed to delete session', 'error');
+    }
+}
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
 async function loadAllSessions(): Promise<SessionData[]> {
     const workspaceRoot = getWorkspaceRoot();
-    if (!workspaceRoot) {
-        return [];
-    }
+    if (!workspaceRoot) return [];
 
     try {
         const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
@@ -1071,93 +1071,73 @@ async function loadAllSessions(): Promise<SessionData[]> {
             try {
                 const filePath = vscode.Uri.joinPath(codetraceDir, filename);
                 const data = await vscode.workspace.fs.readFile(filePath);
-                const session: SessionData = JSON.parse(decoder.decode(data));
-                sessions.push(session);
+                sessions.push(JSON.parse(decoder.decode(data)));
             } catch (error) {
-                console.error(`CodeTrace: Error loading session ${filename}`, error);
+                console.error(`CodeTrace: Error loading ${filename}:`, error);
             }
         }
 
         return sessions;
-    } catch (error) {
-        console.error('CodeTrace: Error loading sessions', error);
+    } catch {
         return [];
     }
 }
 
-/**
- * Save session with updated summary
- */
 async function saveSessionWithSummary(session: SessionData): Promise<boolean> {
     const workspaceRoot = getWorkspaceRoot();
-    if (!workspaceRoot) {
-        return false;
-    }
+    if (!workspaceRoot) return false;
 
     try {
         const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
-        
-        // Generate filename from session start time
-        const timestamp = session.startTime
-            .replace(/:/g, '-')
-            .replace(/\./g, '-');
+        const timestamp = session.startTime.replace(/:/g, '-').replace(/\./g, '-');
         const filename = `session-${timestamp}.json`;
         const filePath = vscode.Uri.joinPath(codetraceDir, filename);
 
-        // Write updated session
         const jsonContent = JSON.stringify(session, null, 2);
-        const encoder = new TextEncoder();
-        await vscode.workspace.fs.writeFile(filePath, encoder.encode(jsonContent));
+        await vscode.workspace.fs.writeFile(filePath, new TextEncoder().encode(jsonContent));
 
         return true;
-    } catch (error) {
-        console.error('CodeTrace: Error saving session with summary', error);
+    } catch {
         return false;
     }
 }
 
-/**
- * Display summary in a nice format
- */
 function showSummary(summary: SessionSummary): void {
     const items: vscode.QuickPickItem[] = [
         {
-            label: '📝 ' + summary.suggestedTitle,
+            label: `📝 ${summary.suggestedTitle}`,
             kind: vscode.QuickPickItemKind.Separator
         } as vscode.QuickPickItem,
         {
             label: '$(lightbulb) What Was Built',
-            description: summary.whatWasBuilt,
-            detail: ''
+            description: summary.whatWasBuilt
         },
         {
             label: '$(target) Apparent Goal',
-            description: summary.apparentGoal,
-            detail: ''
+            description: summary.apparentGoal
         },
         {
-            label: '$(file) Key Files Modified',
-            description: summary.keyFilesModified.slice(0, 5).join(', '),
-            detail: summary.keyFilesModified.length > 5 
-                ? `... and ${summary.keyFilesModified.length - 5} more`
-                : ''
+            label: '$(file) Key Files',
+            description: summary.keyFilesModified.slice(0, 5).join(', ')
         },
         {
             label: '$(info) Generated',
-            description: new Date(summary.generatedAt).toLocaleString(),
-            detail: `Model: ${summary.model}`
+            description: `${new Date(summary.generatedAt).toLocaleString()} using ${summary.model}`
         }
     ];
 
     vscode.window.showQuickPick(items, {
         title: `AI Summary: ${summary.suggestedTitle}`,
-        placeHolder: 'Session summary'
+        placeHolder: 'Summary details'
     });
 }
 
 /**
- * Extension deactivation function.
+ * Simple telemetry - just tracks that the extension was activated
+ * Completely anonymous, no personal data
  */
-export function deactivate(): void {
-    console.log('CodeTrace: Extension is deactivating...');
+function trackActivation(): void {
+    // This would send to a telemetry service in production
+    // For now, just log locally
+    console.log('CodeTrace: Telemetry - extension activated');
 }

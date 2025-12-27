@@ -1,14 +1,31 @@
 {
   "name": "codetrace",
   "displayName": "CodeTrace",
-  "description": "Record coding sessions and analyze them with AI",
-  "version": "0.0.1",
+  "description": "🎬 Smart coding session recorder with AI-powered analysis. Track your coding journey, visualize progress, and get AI insights.",
+  "version": "1.0.0",
   "publisher": "codetrace",
+  "author": "Faozia Abedin",
+  "license": "MIT",
+  "icon": "assets/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/faoziaabedin/CodeTrace.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "coding session",
+    "recorder",
+    "productivity",
+    "AI",
+    "timeline",
+    "git",
+    "tracking"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -18,23 +35,70 @@
     "commands": [
       {
         "command": "codetrace.startRecording",
-        "title": "CodeTrace: Start Recording"
+        "title": "Start Recording",
+        "category": "CodeTrace",
+        "icon": "$(record)"
       },
       {
         "command": "codetrace.stopRecording",
-        "title": "CodeTrace: Stop Recording"
+        "title": "Stop Recording",
+        "category": "CodeTrace",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "codetrace.viewSessionStats",
-        "title": "CodeTrace: View Session Stats"
+        "title": "View Session Stats",
+        "category": "CodeTrace",
+        "icon": "$(graph)"
       },
       {
         "command": "codetrace.openTimeline",
-        "title": "CodeTrace: Open Session Timeline"
+        "title": "Open Session Timeline",
+        "category": "CodeTrace",
+        "icon": "$(timeline-view-icon)"
       },
       {
         "command": "codetrace.generateSummary",
-        "title": "CodeTrace: Generate Session Summary"
+        "title": "Generate AI Summary",
+        "category": "CodeTrace",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "codetrace.exportMarkdown",
+        "title": "Export Session as Markdown",
+        "category": "CodeTrace",
+        "icon": "$(markdown)"
+      },
+      {
+        "command": "codetrace.deleteSession",
+        "title": "Delete Session",
+        "category": "CodeTrace",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codetrace.openSettings",
+        "title": "Open Settings",
+        "category": "CodeTrace",
+        "icon": "$(gear)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "codetrace.startRecording",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "!codetrace.isRecording"
+      },
+      {
+        "command": "codetrace.stopRecording",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "codetrace.isRecording"
+      },
+      {
+        "command": "codetrace.openTimeline",
+        "key": "ctrl+shift+t",
+        "mac": "cmd+shift+t"
       }
     ],
     "configuration": {
@@ -43,17 +107,91 @@
         "codetrace.openaiApiKey": {
           "type": "string",
           "default": "",
-          "description": "OpenAI API key for generating AI-powered session summaries. Get your key at https://platform.openai.com/api-keys",
-          "scope": "application"
+          "description": "🔑 OpenAI API key for AI-powered session summaries. Get yours at https://platform.openai.com/api-keys",
+          "scope": "application",
+          "order": 1
         },
         "codetrace.aiModel": {
           "type": "string",
           "default": "gpt-4o-mini",
           "enum": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
-          "description": "OpenAI model to use for generating summaries",
-          "scope": "application"
+          "enumDescriptions": [
+            "GPT-4o Mini - Fast and cost-effective (recommended)",
+            "GPT-4o - Most capable, higher cost",
+            "GPT-4 Turbo - High capability with vision",
+            "GPT-3.5 Turbo - Fastest, lowest cost"
+          ],
+          "description": "🤖 AI model for generating summaries",
+          "scope": "application",
+          "order": 2
+        },
+        "codetrace.autoRecordOnStart": {
+          "type": "boolean",
+          "default": false,
+          "description": "🎬 Automatically start recording when VS Code opens",
+          "scope": "window",
+          "order": 3
+        },
+        "codetrace.ignorePatterns": {
+          "type": "array",
+          "default": [
+            "node_modules/**",
+            ".git/**",
+            "dist/**",
+            "out/**",
+            "build/**",
+            "*.log",
+            ".codetrace/**",
+            "package-lock.json",
+            "yarn.lock"
+          ],
+          "description": "📁 File patterns to ignore when recording (glob patterns)",
+          "scope": "window",
+          "order": 4
+        },
+        "codetrace.maxSessionsToKeep": {
+          "type": "number",
+          "default": 50,
+          "minimum": 5,
+          "maximum": 500,
+          "description": "📊 Maximum number of sessions to keep (oldest are auto-deleted)",
+          "scope": "window",
+          "order": 5
+        },
+        "codetrace.autoGenerateSummary": {
+          "type": "boolean",
+          "default": false,
+          "description": "✨ Automatically generate AI summary when recording stops (requires API key)",
+          "scope": "window",
+          "order": 6
+        },
+        "codetrace.enableTelemetry": {
+          "type": "boolean",
+          "default": true,
+          "description": "📈 Send anonymous usage data to help improve CodeTrace",
+          "scope": "application",
+          "order": 7
+        },
+        "codetrace.showNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "🔔 Show notification messages for recording events",
+          "scope": "window",
+          "order": 8
         }
       }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "codetrace.startRecording",
+          "when": "!codetrace.isRecording"
+        },
+        {
+          "command": "codetrace.stopRecording",
+          "when": "codetrace.isRecording"
+        }
+      ]
     }
   },
   "scripts": {
@@ -62,13 +200,15 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src --ext ts",
-    "test": "node ./out/test/runTest.js"
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/test-electron": "^2.3.8",
     "eslint": "^8.54.0",
     "typescript": "^5.3.0"
   },

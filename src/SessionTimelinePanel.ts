@@ -1,20 +1,28 @@
 /**
- * SessionTimelinePanel
+ * SessionTimelinePanel - Webview UI for CodeTrace
  * 
- * Manages the webview panel for displaying session timeline.
- * Handles message passing between extension and webview.
+ * This manages the webview panel that displays the session timeline.
+ * I chose to use VS Code's webview API because it allows for rich,
+ * interactive UI while still being sandboxed for security.
  * 
- * VS Code Webview API:
- * - WebviewPanel: A panel that contains a webview
- * - webview.html: Set the HTML content of the webview
- * - webview.postMessage(): Send messages to the webview
- * - webview.onDidReceiveMessage: Handle messages from the webview
+ * The architecture is:
+ * - Extension side (this file): Manages panel lifecycle, loads data
+ * - Webview side (webview/*.js): Handles UI rendering and interactions
+ * - Communication: postMessage API for sending data back and forth
+ * 
+ * @author Faozia Abedin
  */
 
 import * as vscode from 'vscode';
-import * as path from 'path';
 
-// Interface for session data
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
+
+/**
+ * Session data structure - same as in extension.ts
+ * Would be nice to share these types, but keeping it simple for now
+ */
 interface SessionData {
     sessionId: string;
     startTime: string;
@@ -36,36 +44,52 @@ interface SessionData {
         commitsCount: number;
         duration: string;
     };
+    summary?: {
+        whatWasBuilt: string;
+        keyFilesModified: string[];
+        apparentGoal: string;
+        suggestedTitle: string;
+        generatedAt: string;
+        model: string;
+    };
 }
 
+// ============================================================================
+// PANEL CLASS
+// ============================================================================
+
 export class SessionTimelinePanel {
-    // Track the current panel instance (singleton pattern)
+    // Singleton pattern - only one panel at a time
+    // This prevents opening multiple instances of the same view
     public static currentPanel: SessionTimelinePanel | undefined;
 
-    // Identifier for the webview panel type
+    // Used by VS Code to identify the webview type
     public static readonly viewType = 'codetraceTimeline';
 
-    // The actual webview panel
+    // The actual webview panel instance
     private readonly _panel: vscode.WebviewPanel;
     
-    // Extension URI for loading local resources
+    // Path to extension - needed to load local resources
     private readonly _extensionUri: vscode.Uri;
     
-    // Disposables for cleanup
+    // Cleanup handlers - important for preventing memory leaks
     private _disposables: vscode.Disposable[] = [];
 
-    // Cache of loaded sessions
+    // Cache loaded sessions to avoid re-reading files
     private _sessionsCache: SessionData[] = [];
 
     /**
-     * Creates or shows the session timeline panel.
+     * Creates or reveals the timeline panel
+     * Uses singleton pattern - calling this multiple times just reveals the existing panel
      */
     public static createOrShow(extensionUri: vscode.Uri): void {
+        // Figure out which column to show the panel in
+        // Default to the current editor column, or column 1 if no editor is open
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
 
-        // If we already have a panel, show it
+        // If we already have a panel, just reveal it
         if (SessionTimelinePanel.currentPanel) {
             SessionTimelinePanel.currentPanel._panel.reveal(column);
             return;
@@ -77,11 +101,18 @@ export class SessionTimelinePanel {
             'CodeTrace Sessions',
             column || vscode.ViewColumn.One,
             {
+                // Enable JavaScript - needed for our interactive UI
                 enableScripts: true,
+                
+                // Only allow the webview to load resources from specific folders
+                // This is a security feature to prevent loading arbitrary files
                 localResourceRoots: [
                     vscode.Uri.joinPath(extensionUri, 'src', 'webview'),
                     vscode.Uri.joinPath(extensionUri, 'out', 'webview')
                 ],
+                
+                // Keep the webview content even when hidden
+                // This means we don't lose state when switching tabs
                 retainContextWhenHidden: true
             }
         );
@@ -90,23 +121,21 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Revive the panel if VS Code restarts
+     * Private constructor - use createOrShow() instead
+     * This is part of the singleton pattern
      */
-    public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri): void {
-        SessionTimelinePanel.currentPanel = new SessionTimelinePanel(panel, extensionUri);
-    }
-
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
         this._extensionUri = extensionUri;
 
-        // Set the webview's HTML content
+        // Set up the initial HTML content
         this._update();
 
-        // Handle panel disposal
+        // Handle panel being closed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
-        // Handle messages from the webview
+        // Listen for messages from the webview
+        // This is how the UI communicates back to the extension
         this._panel.webview.onDidReceiveMessage(
             async (message) => {
                 await this._handleMessage(message);
@@ -115,7 +144,7 @@ export class SessionTimelinePanel {
             this._disposables
         );
 
-        // Update content when panel becomes visible
+        // Refresh content when panel becomes visible again
         this._panel.onDidChangeViewState(
             () => {
                 if (this._panel.visible) {
@@ -128,7 +157,8 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Handle messages received from the webview
+     * Handles messages from the webview
+     * This is the main communication channel for UI interactions
      */
     private async _handleMessage(message: { 
         command: string; 
@@ -139,8 +169,8 @@ export class SessionTimelinePanel {
         message?: string;
     }): Promise<void> {
         switch (message.command) {
+            // Webview is asking for fresh data
             case 'refresh':
-                // Load and send sessions to webview
                 const sessions = await this._loadSessions();
                 this._sessionsCache = sessions;
                 this._panel.webview.postMessage({
@@ -149,10 +179,12 @@ export class SessionTimelinePanel {
                 });
                 break;
 
+            // User selected a session to view
             case 'loadSession':
-                // Send detailed session data
                 if (message.sessionId) {
-                    const session = this._sessionsCache.find(s => s.sessionId === message.sessionId);
+                    const session = this._sessionsCache.find(
+                        s => s.sessionId === message.sessionId
+                    );
                     if (session) {
                         this._panel.webview.postMessage({
                             command: 'sessionLoaded',
@@ -162,11 +194,10 @@ export class SessionTimelinePanel {
                 }
                 break;
 
+            // User wants to generate AI summary from the webview
             case 'generateSummary':
-                // Execute the generate summary command
-                // This will open the command palette experience
                 await vscode.commands.executeCommand('codetrace.generateSummary');
-                // After summary is generated, refresh the sessions
+                // Give it a second then refresh
                 setTimeout(async () => {
                     const updatedSessions = await this._loadSessions();
                     this._sessionsCache = updatedSessions;
@@ -177,29 +208,22 @@ export class SessionTimelinePanel {
                 }, 1000);
                 break;
 
+            // User wants to open a file
             case 'openFile':
-                // Open a file in the editor
                 if (message.filePath) {
-                    await this._openFile(message.filePath, message.changeIndex);
+                    await this._openFile(message.filePath);
                 }
                 break;
 
+            // User clicked on a commit
             case 'viewCommit':
-                // Show commit in source control
                 if (message.hash) {
                     await this._viewCommit(message.hash);
                 }
                 break;
 
-            case 'viewDetails':
-                // Show session details in quick pick
-                if (message.sessionId) {
-                    await this._showSessionDetails(message.sessionId);
-                }
-                break;
-
+            // Show a notification (from webview)
             case 'showMessage':
-                // Show info message
                 if (message.message) {
                     vscode.window.showInformationMessage(message.message);
                 }
@@ -208,11 +232,9 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Open a file in the editor
-     * @param filePath - Path to the file relative to workspace
-     * @param _changeIndex - Index of the change (reserved for future diff view)
+     * Opens a file in the editor
      */
-    private async _openFile(filePath: string, _changeIndex?: number): Promise<void> {
+    private async _openFile(filePath: string): Promise<void> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showErrorMessage('No workspace folder open');
@@ -223,49 +245,47 @@ export class SessionTimelinePanel {
             const fullPath = vscode.Uri.joinPath(workspaceRoot, filePath);
             const document = await vscode.workspace.openTextDocument(fullPath);
             await vscode.window.showTextDocument(document);
-            
-            vscode.window.showInformationMessage(`Opened: ${filePath}`);
         } catch (error) {
             vscode.window.showErrorMessage(`Could not open file: ${filePath}`);
         }
     }
 
     /**
-     * View commit details (could integrate with git extension)
+     * Shows commit info and copies hash to clipboard
+     * In the future, could integrate with Git extension
      */
     private async _viewCommit(hash: string): Promise<void> {
-        // Try to execute git show command or open source control
         try {
-            // Show the commit hash - in future could integrate with Git extension
-            vscode.window.showInformationMessage(`Commit: ${hash.substring(0, 7)}`);
-            
-            // Try to copy to clipboard
             await vscode.env.clipboard.writeText(hash);
-            vscode.window.showInformationMessage(`Commit hash copied to clipboard: ${hash.substring(0, 7)}`);
+            vscode.window.showInformationMessage(
+                `Commit hash copied: ${hash.substring(0, 7)}`
+            );
         } catch (error) {
             console.error('Error viewing commit:', error);
         }
     }
 
     /**
-     * Load all sessions from the .codetrace folder
+     * Loads all sessions from the .codetrace folder
+     * Sessions are stored as individual JSON files
      */
     private async _loadSessions(): Promise<SessionData[]> {
         const workspaceRoot = this._getWorkspaceRoot();
-        if (!workspaceRoot) {
-            return [];
-        }
+        if (!workspaceRoot) return [];
 
         try {
             const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
             
+            // Try to read the directory
             let files: [string, vscode.FileType][];
             try {
                 files = await vscode.workspace.fs.readDirectory(codetraceDir);
             } catch {
+                // Directory doesn't exist yet - that's fine
                 return [];
             }
 
+            // Filter for session JSON files and sort newest first
             const sessionFiles = files
                 .filter(([name, type]) => 
                     type === vscode.FileType.File && 
@@ -276,6 +296,7 @@ export class SessionTimelinePanel {
                 .sort()
                 .reverse();
 
+            // Load each session file
             const sessions: SessionData[] = [];
             const decoder = new TextDecoder();
 
@@ -286,115 +307,29 @@ export class SessionTimelinePanel {
                     const session: SessionData = JSON.parse(decoder.decode(data));
                     sessions.push(session);
                 } catch (error) {
-                    console.error(`CodeTrace: Error loading session ${filename}`, error);
+                    // Skip corrupted files but log the error
+                    console.error(`CodeTrace: Error loading ${filename}:`, error);
                 }
             }
 
             return sessions;
 
         } catch (error) {
-            console.error('CodeTrace: Error loading sessions', error);
+            console.error('CodeTrace: Error loading sessions:', error);
             return [];
         }
     }
 
     /**
-     * Show detailed session info in a quick pick
-     */
-    private async _showSessionDetails(sessionId: string): Promise<void> {
-        const session = this._sessionsCache.find(s => s.sessionId === sessionId);
-
-        if (!session) {
-            vscode.window.showErrorMessage('Session not found');
-            return;
-        }
-
-        const items: vscode.QuickPickItem[] = [
-            {
-                label: '$(info) Session ID',
-                description: session.sessionId,
-                detail: ''
-            },
-            {
-                label: '$(calendar) Started',
-                description: new Date(session.startTime).toLocaleString(),
-                detail: ''
-            }
-        ];
-
-        if (session.endTime) {
-            items.push({
-                label: '$(calendar) Ended',
-                description: new Date(session.endTime).toLocaleString(),
-                detail: ''
-            });
-        }
-
-        if (session.repository) {
-            items.push({
-                label: '$(repo) Repository',
-                description: session.repository,
-                detail: ''
-            });
-        }
-
-        items.push({
-            label: 'Files Changed',
-            kind: vscode.QuickPickItemKind.Separator
-        } as vscode.QuickPickItem);
-
-        const uniqueFiles = [...new Set(session.changes.map(c => c.file))];
-        for (const file of uniqueFiles.slice(0, 10)) {
-            const saveCount = session.changes.filter(c => c.file === file).length;
-            items.push({
-                label: `$(file-code) ${path.basename(file)}`,
-                description: path.dirname(file),
-                detail: `${saveCount} save${saveCount > 1 ? 's' : ''}`
-            });
-        }
-
-        if (uniqueFiles.length > 10) {
-            items.push({
-                label: `... and ${uniqueFiles.length - 10} more files`,
-                description: '',
-                detail: ''
-            });
-        }
-
-        if (session.commits.length > 0) {
-            items.push({
-                label: 'Commits',
-                kind: vscode.QuickPickItemKind.Separator
-            } as vscode.QuickPickItem);
-
-            for (const commit of session.commits.slice(0, 5)) {
-                items.push({
-                    label: `$(git-commit) ${commit.hash.substring(0, 7)}`,
-                    description: commit.message.substring(0, 50),
-                    detail: `by ${commit.author} at ${new Date(commit.timestamp).toLocaleString()}`
-                });
-            }
-        }
-
-        await vscode.window.showQuickPick(items, {
-            title: `Session Details - ${sessionId.substring(0, 8)}...`,
-            placeHolder: 'Session information'
-        });
-    }
-
-    /**
-     * Get workspace root URI
+     * Gets the workspace root folder
      */
     private _getWorkspaceRoot(): vscode.Uri | undefined {
         const folders = vscode.workspace.workspaceFolders;
-        if (folders && folders.length > 0) {
-            return folders[0].uri;
-        }
-        return undefined;
+        return folders && folders.length > 0 ? folders[0].uri : undefined;
     }
 
     /**
-     * Update the webview content
+     * Updates the webview HTML content
      */
     private _update(): void {
         this._panel.title = 'CodeTrace Sessions';
@@ -402,12 +337,14 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Generate the HTML content for the webview
+     * Generates the HTML for the webview
+     * This loads our CSS and JS files with proper URIs
      */
     private _getHtmlForWebview(): string {
         const webview = this._panel.webview;
 
-        // Get URIs for local resources
+        // Convert local file paths to webview URIs
+        // This is required for security - webviews can't load arbitrary files
         const stylesUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'styles.css')
         );
@@ -415,6 +352,8 @@ export class SessionTimelinePanel {
             vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'script.js')
         );
 
+        // Content Security Policy - important for security
+        // This restricts what the webview can load and execute
         const cspSource = webview.cspSource;
 
         return `<!DOCTYPE html>
@@ -423,7 +362,7 @@ export class SessionTimelinePanel {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline'; script-src ${cspSource} 'unsafe-inline';">
-    <title>CodeTrace - Session Timeline</title>
+    <title>CodeTrace Sessions</title>
     <link rel="stylesheet" href="${stylesUri}">
 </head>
 <body>
@@ -439,12 +378,9 @@ export class SessionTimelinePanel {
         </div>
     </div>
     
-    <!-- List View -->
+    <!-- List View - shows all sessions -->
     <div id="list-view">
-        <div id="stats-summary" class="stats-summary">
-            <!-- Summary stats rendered by JS -->
-        </div>
-        
+        <div id="stats-summary" class="stats-summary"></div>
         <div id="session-list" class="session-list">
             <div class="loading">
                 <div class="spinner"></div>
@@ -453,10 +389,8 @@ export class SessionTimelinePanel {
         </div>
     </div>
     
-    <!-- Detail View (hidden initially) -->
-    <div id="detail-view" class="timeline-detail-view">
-        <!-- Populated by JS when session is selected -->
-    </div>
+    <!-- Detail View - shows single session timeline -->
+    <div id="detail-view" class="timeline-detail-view"></div>
     
     <script src="${scriptUri}"></script>
 </body>
@@ -464,13 +398,15 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Clean up resources when panel is closed
+     * Cleanup when panel is closed
      */
     public dispose(): void {
         SessionTimelinePanel.currentPanel = undefined;
 
+        // Dispose of the panel
         this._panel.dispose();
 
+        // Dispose of all subscriptions
         while (this._disposables.length) {
             const disposable = this._disposables.pop();
             if (disposable) {

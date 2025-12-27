@@ -1,42 +1,42 @@
 /**
- * AIService
+ * AIService - OpenAI Integration for CodeTrace
  * 
- * Handles AI-powered features using OpenAI API.
- * Generates session summaries by analyzing file changes and commits.
+ * This handles all the AI stuff - generating summaries using OpenAI's API.
+ * I chose to use their official SDK because it handles all the edge cases
+ * like rate limiting, retries, and proper error handling.
  * 
- * Security:
- * - API key stored in VS Code settings (encrypted by VS Code)
- * - Key never logged or exposed
- * - Minimal data sent to API (paths only, not full content)
+ * Security notes:
+ * - API key is stored in VS Code settings (which encrypts sensitive data)
+ * - I never log the API key anywhere
+ * - Only file paths are sent to the API, never actual code content
+ *   (that would be too expensive and potentially leak private code)
+ * 
+ * @author Faozia Abedin
  */
 
 import * as vscode from 'vscode';
 import OpenAI from 'openai';
 
 // ============================================================================
-// TYPES
+// TYPE DEFINITIONS
 // ============================================================================
 
 /**
- * Structure for AI-generated session summary
+ * The structure for AI-generated summaries
+ * I designed this to be useful at a glance while still having enough detail
  */
 export interface SessionSummary {
-    /** High-level description of what was built/changed */
-    whatWasBuilt: string;
-    /** List of key files that were modified */
-    keyFilesModified: string[];
-    /** The apparent goal or purpose of the session */
-    apparentGoal: string;
-    /** AI-suggested title for the session */
-    suggestedTitle: string;
-    /** When the summary was generated */
-    generatedAt: string;
-    /** Model used to generate the summary */
-    model: string;
+    whatWasBuilt: string;         // High-level description
+    keyFilesModified: string[];   // Most important files
+    apparentGoal: string;         // What I think the user was trying to accomplish
+    suggestedTitle: string;       // Short title for the session
+    generatedAt: string;          // ISO timestamp
+    model: string;                // Which model generated this
 }
 
 /**
- * Session data structure for AI analysis
+ * Simplified session data for AI analysis
+ * I strip out the content because it's too large and expensive to send
  */
 interface SessionForAnalysis {
     sessionId: string;
@@ -68,18 +68,17 @@ export class AIService {
     private openai: OpenAI | null = null;
 
     /**
-     * Initialize OpenAI client with API key from settings
-     * @returns true if initialization successful, false otherwise
+     * Sets up the OpenAI client with the user's API key
+     * Returns false if the key isn't configured
      */
     private async initializeClient(): Promise<boolean> {
-        // Get API key from VS Code settings
         const config = vscode.workspace.getConfiguration('codetrace');
         const apiKey = config.get<string>('openaiApiKey');
 
+        // No API key? Show a helpful message with a button to open settings
         if (!apiKey || apiKey.trim() === '') {
-            // Show helpful error with action to open settings
             const action = await vscode.window.showErrorMessage(
-                'CodeTrace: OpenAI API key not configured. Please add your API key in settings.',
+                'OpenAI API key not set. Add it in settings to use AI features.',
                 'Open Settings'
             );
             
@@ -93,23 +92,19 @@ export class AIService {
         }
 
         try {
-            // Create OpenAI client
-            // Note: API key is not logged anywhere
-            this.openai = new OpenAI({
-                apiKey: apiKey
-            });
+            // Create the client - the SDK handles all the HTTP stuff
+            this.openai = new OpenAI({ apiKey });
             return true;
         } catch (error) {
             console.error('CodeTrace: Failed to initialize OpenAI client');
-            vscode.window.showErrorMessage(
-                'CodeTrace: Failed to initialize OpenAI client. Please check your API key.'
-            );
+            vscode.window.showErrorMessage('Failed to connect to OpenAI. Check your API key.');
             return false;
         }
     }
 
     /**
-     * Get the configured AI model
+     * Gets the model setting - defaulting to gpt-4o-mini because it's
+     * fast and cheap but still pretty good at understanding code context
      */
     private getModel(): string {
         const config = vscode.workspace.getConfiguration('codetrace');
@@ -117,58 +112,57 @@ export class AIService {
     }
 
     /**
-     * Generate a summary for a coding session
-     * @param session - The session data to analyze
-     * @returns The generated summary or null if failed
+     * Main method - generates a summary for a coding session
+     * 
+     * The approach is:
+     * 1. Extract just the metadata (no file contents - too expensive)
+     * 2. Build a prompt that gives the AI good context
+     * 3. Ask for JSON output so we can parse it easily
+     * 4. Handle all the various errors that can happen with APIs
      */
     public async generateSessionSummary(
         session: SessionForAnalysis
     ): Promise<SessionSummary | null> {
-        // Initialize client
         const initialized = await this.initializeClient();
         if (!initialized || !this.openai) {
             return null;
         }
 
-        // Prepare the analysis data (minimal data, no file content)
+        // Build the data to send (minimal, no content)
         const analysisData = this.prepareAnalysisData(session);
-        
-        // Build the prompt
         const prompt = this.buildPrompt(analysisData);
 
         try {
             const model = this.getModel();
             
-            // Call OpenAI API
+            // Make the API call
+            // I'm using JSON mode so the response is always valid JSON
             const response = await this.openai.chat.completions.create({
                 model: model,
                 messages: [
                     {
                         role: 'system',
-                        content: `You are a helpful assistant that analyzes coding sessions and provides concise, insightful summaries. 
+                        content: `You're a helpful assistant that analyzes coding sessions. 
                         
-Your task is to analyze the file changes and commits from a coding session and generate a summary.
+Given information about files changed and commits made, generate a concise summary.
 
-Always respond with valid JSON in exactly this format:
+Always respond with valid JSON:
 {
-    "whatWasBuilt": "A clear, 1-2 sentence description of what was built or changed",
+    "whatWasBuilt": "1-2 sentence description",
     "keyFilesModified": ["file1.ts", "file2.ts"],
-    "apparentGoal": "The likely purpose or goal of this coding session",
-    "suggestedTitle": "A short, descriptive title for this session (5 words max)"
+    "apparentGoal": "What the developer was likely trying to accomplish",
+    "suggestedTitle": "Short title, 5 words max"
 }
 
-Focus on:
-- Identifying the main purpose of the work
-- Highlighting the most important files
-- Being concise but informative`
+Be concise but insightful. Focus on the big picture.`
                     },
                     {
                         role: 'user',
                         content: prompt
                     }
                 ],
-                temperature: 0.7,
-                max_tokens: 500,
+                temperature: 0.7,  // Some creativity but not too wild
+                max_tokens: 500,   // Summaries should be short
                 response_format: { type: 'json_object' }
             });
 
@@ -180,7 +174,7 @@ Focus on:
 
             const parsed = JSON.parse(content);
 
-            // Build and return the summary
+            // Build the summary object
             const summary: SessionSummary = {
                 whatWasBuilt: parsed.whatWasBuilt || 'Unable to determine',
                 keyFilesModified: parsed.keyFilesModified || [],
@@ -193,43 +187,43 @@ Focus on:
             return summary;
 
         } catch (error) {
-            // Handle specific error types
-            if (error instanceof OpenAI.APIError) {
-                if (error.status === 401) {
-                    vscode.window.showErrorMessage(
-                        'CodeTrace: Invalid OpenAI API key. Please check your settings.'
-                    );
-                } else if (error.status === 429) {
-                    vscode.window.showErrorMessage(
-                        'CodeTrace: OpenAI rate limit exceeded. Please try again later.'
-                    );
-                } else if (error.status === 500) {
-                    vscode.window.showErrorMessage(
-                        'CodeTrace: OpenAI service error. Please try again later.'
-                    );
-                } else {
-                    vscode.window.showErrorMessage(
-                        `CodeTrace: OpenAI API error: ${error.message}`
-                    );
-                }
-            } else if (error instanceof SyntaxError) {
-                vscode.window.showErrorMessage(
-                    'CodeTrace: Failed to parse AI response. Please try again.'
-                );
-            } else {
-                vscode.window.showErrorMessage(
-                    'CodeTrace: Failed to generate summary. Please try again.'
-                );
-            }
-            
-            console.error('CodeTrace: AI summary generation failed');
+            // Handle different types of errors with helpful messages
+            this.handleError(error);
             return null;
         }
     }
 
     /**
-     * Prepare minimal analysis data from session
-     * Only includes file paths and metadata, NOT file content
+     * Handles API errors with user-friendly messages
+     */
+    private handleError(error: unknown): void {
+        if (error instanceof OpenAI.APIError) {
+            switch (error.status) {
+                case 401:
+                    vscode.window.showErrorMessage('Invalid API key. Please check your settings.');
+                    break;
+                case 429:
+                    vscode.window.showErrorMessage('Rate limit exceeded. Try again in a minute.');
+                    break;
+                case 500:
+                case 503:
+                    vscode.window.showErrorMessage('OpenAI is having issues. Try again later.');
+                    break;
+                default:
+                    vscode.window.showErrorMessage(`OpenAI error: ${error.message}`);
+            }
+        } else if (error instanceof SyntaxError) {
+            vscode.window.showErrorMessage('Failed to parse AI response. Try again.');
+        } else {
+            vscode.window.showErrorMessage('Failed to generate summary. Check the console for details.');
+        }
+        
+        console.error('CodeTrace: AI error:', error);
+    }
+
+    /**
+     * Prepares minimal data for the AI
+     * I'm careful to only include paths, not actual file content
      */
     private prepareAnalysisData(session: SessionForAnalysis): {
         duration: string;
@@ -242,19 +236,20 @@ Focus on:
         // Get unique files
         const filesChanged = [...new Set(session.changes.map(c => c.file))];
         
-        // Build file change timeline
+        // Build a timeline of changes
         const fileChangeTimeline = session.changes.map(c => ({
             file: c.file,
             time: new Date(c.timestamp).toLocaleTimeString()
         }));
 
-        // Get commits with messages
+        // Get commit info (messages are useful context)
         const commits = session.commits.map(c => ({
             message: c.message,
             time: new Date(c.timestamp).toLocaleTimeString()
         }));
 
-        // Extract unique directories to understand project structure
+        // Figure out which directories were touched
+        // This helps the AI understand the project structure
         const uniqueDirectories = [...new Set(
             filesChanged.map(f => {
                 const parts = f.split('/');
@@ -262,11 +257,8 @@ Focus on:
             })
         )];
 
-        // Calculate duration
-        const duration = session.stats?.duration || 'Unknown';
-
         return {
-            duration: `${duration} minutes`,
+            duration: `${session.stats?.duration || 'Unknown'} minutes`,
             repository: session.repository,
             filesChanged,
             fileChangeTimeline,
@@ -276,7 +268,8 @@ Focus on:
     }
 
     /**
-     * Build the prompt for the AI
+     * Builds a prompt that gives the AI good context
+     * I found that being specific about what info is available helps a lot
      */
     private buildPrompt(data: {
         duration: string;
@@ -286,49 +279,52 @@ Focus on:
         commits: Array<{ message: string; time: string }>;
         uniqueDirectories: string[];
     }): string {
-        let prompt = `Analyze this coding session and generate a summary.\n\n`;
+        let prompt = `Analyze this coding session:\n\n`;
         
-        prompt += `**Session Duration:** ${data.duration}\n`;
+        prompt += `**Duration:** ${data.duration}\n`;
         
         if (data.repository) {
             prompt += `**Repository:** ${data.repository}\n`;
         }
         
-        prompt += `\n**Files Modified (${data.filesChanged.length} files):**\n`;
+        // List the files (limited to 20 to avoid token limits)
+        prompt += `\n**Files Modified (${data.filesChanged.length}):**\n`;
         for (const file of data.filesChanged.slice(0, 20)) {
             prompt += `- ${file}\n`;
         }
         if (data.filesChanged.length > 20) {
-            prompt += `- ... and ${data.filesChanged.length - 20} more files\n`;
+            prompt += `- ...and ${data.filesChanged.length - 20} more\n`;
         }
 
-        prompt += `\n**Directory Structure:**\n`;
+        // Directory structure gives context about project organization
+        prompt += `\n**Directories:**\n`;
         for (const dir of data.uniqueDirectories.slice(0, 10)) {
             prompt += `- ${dir}/\n`;
         }
 
+        // Commit messages are super valuable - they often explain intent
         if (data.commits.length > 0) {
-            prompt += `\n**Commits Made (${data.commits.length}):**\n`;
+            prompt += `\n**Commits (${data.commits.length}):**\n`;
             for (const commit of data.commits) {
                 prompt += `- "${commit.message}" (${commit.time})\n`;
             }
         }
 
-        prompt += `\n**File Change Timeline (first 15 changes):**\n`;
+        // Show the order things happened in
+        prompt += `\n**Activity Timeline:**\n`;
         for (const change of data.fileChangeTimeline.slice(0, 15)) {
             prompt += `- ${change.time}: ${change.file}\n`;
         }
 
-        prompt += `\nBased on this information, generate a JSON summary of what was accomplished in this coding session.`;
+        prompt += `\nGenerate a JSON summary of this session.`;
 
         return prompt;
     }
 
     /**
-     * Dispose of resources
+     * Cleanup
      */
     public dispose(): void {
         this.openai = null;
     }
 }
-

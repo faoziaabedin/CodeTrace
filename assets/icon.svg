@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="#1e1e1e"/>
+  <circle cx="64" cy="64" r="56" fill="#252526"/>
+  
+  <!-- Recording indicator -->
+  <circle cx="64" cy="64" r="20" fill="#e74c3c">
+    <animate attributeName="opacity" values="1;0.6;1" dur="1.5s" repeatCount="indefinite"/>
+  </circle>
+  
+  <!-- Timeline bars -->
+  <rect x="20" y="95" width="88" height="4" rx="2" fill="#3c3c3c"/>
+  <rect x="25" y="95" width="15" height="4" rx="2" fill="#0078d4"/>
+  <rect x="45" y="95" width="20" height="4" rx="2" fill="#0078d4"/>
+  <rect x="70" y="95" width="10" height="4" rx="2" fill="#0078d4"/>
+  <rect x="85" y="95" width="18" height="4" rx="2" fill="#0078d4"/>
+  
+  <!-- Code brackets -->
+  <path d="M35 45 L25 64 L35 83" stroke="#569cd6" stroke-width="4" fill="none" stroke-linecap="round"/>
+  <path d="M93 45 L103 64 L93 83" stroke="#569cd6" stroke-width="4" fill="none" stroke-linecap="round"/>
+</svg>
+
