@@ -2,7 +2,7 @@
  * SessionTimelinePanel
  * 
  * Manages the webview panel for displaying session timeline.
- * Uses VS Code's Webview API to create an interactive panel.
+ * Handles message passing between extension and webview.
  * 
  * VS Code Webview API:
  * - WebviewPanel: A panel that contains a webview
@@ -14,7 +14,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 
-// Interface for session data (matches the main extension)
+// Interface for session data
 interface SessionData {
     sessionId: string;
     startTime: string;
@@ -54,14 +54,13 @@ export class SessionTimelinePanel {
     // Disposables for cleanup
     private _disposables: vscode.Disposable[] = [];
 
+    // Cache of loaded sessions
+    private _sessionsCache: SessionData[] = [];
+
     /**
      * Creates or shows the session timeline panel.
-     * Uses singleton pattern - only one panel can exist at a time.
-     * 
-     * @param extensionUri - The URI of the extension directory
      */
     public static createOrShow(extensionUri: vscode.Uri): void {
-        // Determine which column to show the panel in
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
@@ -72,20 +71,17 @@ export class SessionTimelinePanel {
             return;
         }
 
-        // Otherwise, create a new panel
+        // Create a new panel
         const panel = vscode.window.createWebviewPanel(
             SessionTimelinePanel.viewType,
             'CodeTrace Sessions',
             column || vscode.ViewColumn.One,
             {
-                // Enable JavaScript in the webview
                 enableScripts: true,
-                // Restrict the webview to only load resources from specific directories
                 localResourceRoots: [
                     vscode.Uri.joinPath(extensionUri, 'src', 'webview'),
                     vscode.Uri.joinPath(extensionUri, 'out', 'webview')
                 ],
-                // Retain state when panel is hidden
                 retainContextWhenHidden: true
             }
         );
@@ -94,8 +90,12 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Private constructor - use createOrShow() instead
+     * Revive the panel if VS Code restarts
      */
+    public static revive(panel: vscode.WebviewPanel, extensionUri: vscode.Uri): void {
+        SessionTimelinePanel.currentPanel = new SessionTimelinePanel(panel, extensionUri);
+    }
+
     private constructor(panel: vscode.WebviewPanel, extensionUri: vscode.Uri) {
         this._panel = panel;
         this._extensionUri = extensionUri;
@@ -130,11 +130,19 @@ export class SessionTimelinePanel {
     /**
      * Handle messages received from the webview
      */
-    private async _handleMessage(message: { command: string; sessionId?: string }): Promise<void> {
+    private async _handleMessage(message: { 
+        command: string; 
+        sessionId?: string;
+        filePath?: string;
+        changeIndex?: number;
+        hash?: string;
+        message?: string;
+    }): Promise<void> {
         switch (message.command) {
             case 'refresh':
                 // Load and send sessions to webview
                 const sessions = await this._loadSessions();
+                this._sessionsCache = sessions;
                 this._panel.webview.postMessage({
                     command: 'loadSessions',
                     sessions: sessions
@@ -142,21 +150,85 @@ export class SessionTimelinePanel {
                 break;
 
             case 'loadSession':
-                // Handle load session request
+                // Send detailed session data
                 if (message.sessionId) {
-                    vscode.window.showInformationMessage(
-                        `Loading session: ${message.sessionId.substring(0, 8)}...`
-                    );
-                    // Future: Could implement session replay here
+                    const session = this._sessionsCache.find(s => s.sessionId === message.sessionId);
+                    if (session) {
+                        this._panel.webview.postMessage({
+                            command: 'sessionLoaded',
+                            session: session
+                        });
+                    }
+                }
+                break;
+
+            case 'openFile':
+                // Open a file in the editor
+                if (message.filePath) {
+                    await this._openFile(message.filePath, message.changeIndex);
+                }
+                break;
+
+            case 'viewCommit':
+                // Show commit in source control
+                if (message.hash) {
+                    await this._viewCommit(message.hash);
                 }
                 break;
 
             case 'viewDetails':
-                // Show session details in a quick pick or new panel
+                // Show session details in quick pick
                 if (message.sessionId) {
                     await this._showSessionDetails(message.sessionId);
                 }
                 break;
+
+            case 'showMessage':
+                // Show info message
+                if (message.message) {
+                    vscode.window.showInformationMessage(message.message);
+                }
+                break;
+        }
+    }
+
+    /**
+     * Open a file in the editor
+     * @param filePath - Path to the file relative to workspace
+     * @param _changeIndex - Index of the change (reserved for future diff view)
+     */
+    private async _openFile(filePath: string, _changeIndex?: number): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace folder open');
+            return;
+        }
+
+        try {
+            const fullPath = vscode.Uri.joinPath(workspaceRoot, filePath);
+            const document = await vscode.workspace.openTextDocument(fullPath);
+            await vscode.window.showTextDocument(document);
+            
+            vscode.window.showInformationMessage(`Opened: ${filePath}`);
+        } catch (error) {
+            vscode.window.showErrorMessage(`Could not open file: ${filePath}`);
+        }
+    }
+
+    /**
+     * View commit details (could integrate with git extension)
+     */
+    private async _viewCommit(hash: string): Promise<void> {
+        // Try to execute git show command or open source control
+        try {
+            // Show the commit hash - in future could integrate with Git extension
+            vscode.window.showInformationMessage(`Commit: ${hash.substring(0, 7)}`);
+            
+            // Try to copy to clipboard
+            await vscode.env.clipboard.writeText(hash);
+            vscode.window.showInformationMessage(`Commit hash copied to clipboard: ${hash.substring(0, 7)}`);
+        } catch (error) {
+            console.error('Error viewing commit:', error);
         }
     }
 
@@ -172,16 +244,13 @@ export class SessionTimelinePanel {
         try {
             const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
             
-            // List files in .codetrace directory
             let files: [string, vscode.FileType][];
             try {
                 files = await vscode.workspace.fs.readDirectory(codetraceDir);
             } catch {
-                // Directory doesn't exist
                 return [];
             }
 
-            // Filter for session JSON files
             const sessionFiles = files
                 .filter(([name, type]) => 
                     type === vscode.FileType.File && 
@@ -190,9 +259,8 @@ export class SessionTimelinePanel {
                 )
                 .map(([name]) => name)
                 .sort()
-                .reverse(); // Most recent first
+                .reverse();
 
-            // Load each session file
             const sessions: SessionData[] = [];
             const decoder = new TextDecoder();
 
@@ -219,15 +287,13 @@ export class SessionTimelinePanel {
      * Show detailed session info in a quick pick
      */
     private async _showSessionDetails(sessionId: string): Promise<void> {
-        const sessions = await this._loadSessions();
-        const session = sessions.find(s => s.sessionId === sessionId);
+        const session = this._sessionsCache.find(s => s.sessionId === sessionId);
 
         if (!session) {
             vscode.window.showErrorMessage('Session not found');
             return;
         }
 
-        // Build quick pick items with session details
         const items: vscode.QuickPickItem[] = [
             {
                 label: '$(info) Session ID',
@@ -257,13 +323,11 @@ export class SessionTimelinePanel {
             });
         }
 
-        // Add separator and file list
         items.push({
             label: 'Files Changed',
             kind: vscode.QuickPickItemKind.Separator
         } as vscode.QuickPickItem);
 
-        // Get unique files
         const uniqueFiles = [...new Set(session.changes.map(c => c.file))];
         for (const file of uniqueFiles.slice(0, 10)) {
             const saveCount = session.changes.filter(c => c.file === file).length;
@@ -282,7 +346,6 @@ export class SessionTimelinePanel {
             });
         }
 
-        // Add commits section
         if (session.commits.length > 0) {
             items.push({
                 label: 'Commits',
@@ -324,14 +387,12 @@ export class SessionTimelinePanel {
     }
 
     /**
-     * Generate the HTML content for the webview.
-     * Loads the HTML template and replaces placeholders with actual URIs.
+     * Generate the HTML content for the webview
      */
     private _getHtmlForWebview(): string {
         const webview = this._panel.webview;
 
         // Get URIs for local resources
-        // webview.asWebviewUri() converts a local URI to one that can be used in the webview
         const stylesUri = webview.asWebviewUri(
             vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'styles.css')
         );
@@ -339,11 +400,8 @@ export class SessionTimelinePanel {
             vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'script.js')
         );
 
-        // Content Security Policy
-        // This restricts what content can be loaded in the webview for security
         const cspSource = webview.cspSource;
 
-        // Return the HTML with placeholders replaced
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -359,21 +417,30 @@ export class SessionTimelinePanel {
             <span class="icon">⏱️</span>
             CodeTrace Sessions
         </h1>
-        <button class="refresh-btn" onclick="refresh()">
-            <span>🔄</span>
-            Refresh
-        </button>
-    </div>
-    
-    <div id="stats-summary" class="stats-summary">
-        <!-- Summary stats will be rendered here -->
-    </div>
-    
-    <div id="session-list" class="session-list">
-        <div class="loading">
-            <div class="spinner"></div>
-            <p>Loading sessions...</p>
+        <div class="header-actions">
+            <button class="btn btn-secondary" onclick="refresh()">
+                🔄 Refresh
+            </button>
         </div>
+    </div>
+    
+    <!-- List View -->
+    <div id="list-view">
+        <div id="stats-summary" class="stats-summary">
+            <!-- Summary stats rendered by JS -->
+        </div>
+        
+        <div id="session-list" class="session-list">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading sessions...</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Detail View (hidden initially) -->
+    <div id="detail-view" class="timeline-detail-view">
+        <!-- Populated by JS when session is selected -->
     </div>
     
     <script src="${scriptUri}"></script>
@@ -387,7 +454,6 @@ export class SessionTimelinePanel {
     public dispose(): void {
         SessionTimelinePanel.currentPanel = undefined;
 
-        // Clean up resources
         this._panel.dispose();
 
         while (this._disposables.length) {
@@ -398,4 +464,3 @@ export class SessionTimelinePanel {
         }
     }
 }
-
