@@ -1,0 +1,314 @@
+/* 
+ * CodeTrace Session Timeline Styles
+ * Uses VS Code CSS variables for theme compatibility
+ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-foreground);
+    background-color: var(--vscode-editor-background);
+    padding: 20px;
+    line-height: 1.6;
+}
+
+/* Header */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.header h1 {
+    font-size: 1.5em;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.header .icon {
+    font-size: 1.2em;
+}
+
+.refresh-btn {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background-color 0.2s;
+}
+
+.refresh-btn:hover {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+/* Stats Summary */
+.stats-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.stat-card {
+    background-color: var(--vscode-editor-inactiveSelectionBackground);
+    border-radius: 8px;
+    padding: 16px;
+    text-align: center;
+}
+
+.stat-card .value {
+    font-size: 2em;
+    font-weight: 700;
+    color: var(--vscode-textLink-foreground);
+}
+
+.stat-card .label {
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    margin-top: 4px;
+}
+
+/* Session List */
+.session-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.session-card {
+    background-color: var(--vscode-editor-inactiveSelectionBackground);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 8px;
+    padding: 16px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.session-card:hover {
+    border-color: var(--vscode-focusBorder);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.session-card.active {
+    border-left: 3px solid var(--vscode-terminal-ansiGreen);
+}
+
+.session-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+}
+
+.session-title {
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    font-size: 1.05em;
+}
+
+.session-id {
+    font-size: 0.8em;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family);
+    margin-top: 4px;
+}
+
+.session-status {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.session-status.active {
+    background-color: var(--vscode-terminal-ansiGreen);
+    color: var(--vscode-editor-background);
+}
+
+.session-status.completed {
+    background-color: var(--vscode-descriptionForeground);
+    color: var(--vscode-editor-background);
+}
+
+/* Session Stats Grid */
+.session-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.session-stat {
+    text-align: center;
+    padding: 10px;
+    background-color: var(--vscode-editor-background);
+    border-radius: 6px;
+}
+
+.session-stat .value {
+    font-size: 1.3em;
+    font-weight: 600;
+    color: var(--vscode-textLink-foreground);
+}
+
+.session-stat .label {
+    font-size: 0.75em;
+    color: var(--vscode-descriptionForeground);
+    margin-top: 2px;
+}
+
+/* Repository Badge */
+.repo-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background-color: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    border-radius: 4px;
+    font-size: 0.8em;
+    margin-bottom: 12px;
+}
+
+/* Session Actions */
+.session-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--vscode-panel-border);
+}
+
+.btn {
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    border: none;
+    transition: background-color 0.2s;
+}
+
+.btn-primary {
+    background-color: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+}
+
+.btn-primary:hover {
+    background-color: var(--vscode-button-hoverBackground);
+}
+
+.btn-secondary {
+    background-color: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+}
+
+.btn-secondary:hover {
+    background-color: var(--vscode-button-secondaryHoverBackground);
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.empty-state .icon {
+    font-size: 3em;
+    margin-bottom: 16px;
+    opacity: 0.5;
+}
+
+.empty-state h2 {
+    font-size: 1.2em;
+    margin-bottom: 8px;
+    color: var(--vscode-foreground);
+}
+
+.empty-state p {
+    font-size: 0.9em;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+/* Loading State */
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.loading .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--vscode-panel-border);
+    border-top-color: var(--vscode-textLink-foreground);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Timeline Indicator */
+.timeline-dot {
+    width: 12px;
+    height: 12px;
+    background-color: var(--vscode-textLink-foreground);
+    border-radius: 50%;
+    position: absolute;
+    left: -26px;
+    top: 20px;
+}
+
+.session-card {
+    position: relative;
+    margin-left: 20px;
+}
+
+.session-list::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background-color: var(--vscode-panel-border);
+}
+
+.session-list {
+    position: relative;
+    padding-left: 20px;
+}
+
+/* Responsive */
+@media (max-width: 500px) {
+    .session-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .stats-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+

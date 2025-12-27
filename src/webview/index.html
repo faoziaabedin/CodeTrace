@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src {{cspSource}} 'unsafe-inline'; script-src {{cspSource}} 'unsafe-inline';">
+    <title>CodeTrace - Session Timeline</title>
+    <link rel="stylesheet" href="{{stylesUri}}">
+</head>
+<body>
+    <div class="header">
+        <h1>
+            <span class="icon">⏱️</span>
+            CodeTrace Sessions
+        </h1>
+        <button class="refresh-btn" onclick="refresh()">
+            <span>🔄</span>
+            Refresh
+        </button>
+    </div>
+    
+    <div id="stats-summary" class="stats-summary">
+        <!-- Summary stats will be rendered here -->
+    </div>
+    
+    <div id="session-list" class="session-list">
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Loading sessions...</p>
+        </div>
+    </div>
+    
+    <script src="{{scriptUri}}"></script>
+</body>
+</html>
+

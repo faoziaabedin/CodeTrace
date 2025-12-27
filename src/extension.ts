@@ -24,6 +24,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import simpleGit, { SimpleGit, LogResult } from 'simple-git';
+import { SessionTimelinePanel } from './SessionTimelinePanel';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -913,10 +914,20 @@ export function activate(context: vscode.ExtensionContext): void {
         }
     );
 
+    // Register the "Open Session Timeline" command
+    // This opens a webview panel showing all recorded sessions
+    const timelineCommand = vscode.commands.registerCommand(
+        'codetrace.openTimeline',
+        () => {
+            SessionTimelinePanel.createOrShow(context.extensionUri);
+        }
+    );
+
     // Add to subscriptions
     context.subscriptions.push(startCommand);
     context.subscriptions.push(stopCommand);
     context.subscriptions.push(statsCommand);
+    context.subscriptions.push(timelineCommand);
     context.subscriptions.push({
         dispose: async () => {
             await recordingManager.dispose();
