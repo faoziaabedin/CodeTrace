@@ -162,6 +162,21 @@ export class SessionTimelinePanel {
                 }
                 break;
 
+            case 'generateSummary':
+                // Execute the generate summary command
+                // This will open the command palette experience
+                await vscode.commands.executeCommand('codetrace.generateSummary');
+                // After summary is generated, refresh the sessions
+                setTimeout(async () => {
+                    const updatedSessions = await this._loadSessions();
+                    this._sessionsCache = updatedSessions;
+                    this._panel.webview.postMessage({
+                        command: 'loadSessions',
+                        sessions: updatedSessions
+                    });
+                }, 1000);
+                break;
+
             case 'openFile':
                 // Open a file in the editor
                 if (message.filePath) {

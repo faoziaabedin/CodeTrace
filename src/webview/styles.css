@@ -733,6 +733,162 @@ body {
     color: var(--vscode-descriptionForeground);
 }
 
+/* ============================================
+   AI SUMMARY STYLES
+   ============================================ */
+
+/* AI Summary Preview in Session Cards */
+.ai-summary-preview {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    background: linear-gradient(135deg, 
+        rgba(99, 102, 241, 0.1) 0%, 
+        rgba(168, 85, 247, 0.1) 100%);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    border-left: 3px solid #8b5cf6;
+}
+
+.ai-badge {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.7em;
+    font-weight: 700;
+    flex-shrink: 0;
+}
+
+.ai-badge-large {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.summary-text {
+    font-size: 0.9em;
+    color: var(--vscode-foreground);
+    line-height: 1.4;
+}
+
+/* AI Summary Card in Detail View */
+.ai-summary-card {
+    background: linear-gradient(135deg, 
+        rgba(99, 102, 241, 0.08) 0%, 
+        rgba(168, 85, 247, 0.08) 100%);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+    from { 
+        opacity: 0; 
+        transform: translateY(-10px); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0); 
+    }
+}
+
+.ai-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.ai-model {
+    font-size: 0.75em;
+    color: var(--vscode-descriptionForeground);
+}
+
+.ai-summary-title {
+    font-size: 1.4em;
+    font-weight: 700;
+    color: var(--vscode-foreground);
+    margin-bottom: 16px;
+    line-height: 1.3;
+}
+
+.ai-summary-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.ai-summary-section {
+    background: var(--vscode-editor-background);
+    border-radius: 8px;
+    padding: 14px;
+}
+
+.ai-summary-label {
+    font-size: 0.8em;
+    font-weight: 600;
+    color: #8b5cf6;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 6px;
+}
+
+.ai-summary-text {
+    color: var(--vscode-foreground);
+    line-height: 1.5;
+}
+
+.ai-summary-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.file-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    border-radius: 4px;
+    font-size: 0.85em;
+    font-family: var(--vscode-editor-font-family);
+}
+
+/* AI Summary Placeholder */
+.ai-summary-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 16px;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border: 1px dashed var(--vscode-panel-border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.ai-summary-placeholder .btn-sm {
+    padding: 6px 12px;
+    font-size: 0.85em;
+}
+
+/* Session Status with Summary */
+.session-status.summarized {
+    background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+    color: white;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     .session-stats {
@@ -750,5 +906,13 @@ body {
     .session-detail-meta {
         flex-direction: column;
         gap: 8px;
+    }
+    
+    .ai-summary-card {
+        padding: 16px;
+    }
+    
+    .ai-summary-title {
+        font-size: 1.2em;
     }
 }

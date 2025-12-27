@@ -31,8 +31,30 @@
       {
         "command": "codetrace.openTimeline",
         "title": "CodeTrace: Open Session Timeline"
+      },
+      {
+        "command": "codetrace.generateSummary",
+        "title": "CodeTrace: Generate Session Summary"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "CodeTrace",
+      "properties": {
+        "codetrace.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key for generating AI-powered session summaries. Get your key at https://platform.openai.com/api-keys",
+          "scope": "application"
+        },
+        "codetrace.aiModel": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "enum": ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+          "description": "OpenAI model to use for generating summaries",
+          "scope": "application"
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -51,6 +73,7 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "openai": "^6.15.0",
     "simple-git": "^3.30.0"
   }
 }

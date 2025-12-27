@@ -25,6 +25,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import simpleGit, { SimpleGit, LogResult } from 'simple-git';
 import { SessionTimelinePanel } from './SessionTimelinePanel';
+import { AIService, SessionSummary } from './AIService';
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -86,6 +87,8 @@ interface SessionData {
     commits: CommitInfo[];
     /** Statistics about the session */
     stats?: SessionStats;
+    /** AI-generated summary of the session */
+    summary?: SessionSummary;
 }
 
 // ============================================================================
@@ -881,6 +884,7 @@ class RecordingManager {
 // ============================================================================
 
 let recordingManager: RecordingManager;
+let aiService: AIService;
 
 /**
  * Extension activation function.
@@ -888,8 +892,9 @@ let recordingManager: RecordingManager;
 export function activate(context: vscode.ExtensionContext): void {
     console.log('CodeTrace: Extension is now activating...');
 
-    // Create recording manager
+    // Create recording manager and AI service
     recordingManager = new RecordingManager();
+    aiService = new AIService();
 
     // Register commands
     const startCommand = vscode.commands.registerCommand(
@@ -915,11 +920,18 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     // Register the "Open Session Timeline" command
-    // This opens a webview panel showing all recorded sessions
     const timelineCommand = vscode.commands.registerCommand(
         'codetrace.openTimeline',
         () => {
             SessionTimelinePanel.createOrShow(context.extensionUri);
+        }
+    );
+
+    // Register the "Generate Session Summary" command
+    const summaryCommand = vscode.commands.registerCommand(
+        'codetrace.generateSummary',
+        async () => {
+            await generateSessionSummary(context);
         }
     );
 
@@ -928,13 +940,219 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(stopCommand);
     context.subscriptions.push(statsCommand);
     context.subscriptions.push(timelineCommand);
+    context.subscriptions.push(summaryCommand);
     context.subscriptions.push({
         dispose: async () => {
             await recordingManager.dispose();
+            aiService.dispose();
         }
     });
 
     console.log('CodeTrace: Extension activated successfully!');
+}
+
+/**
+ * Generate AI summary for a selected session
+ * @param _context - Extension context (reserved for future use)
+ */
+async function generateSessionSummary(_context: vscode.ExtensionContext): Promise<void> {
+    // Load available sessions
+    const sessions = await loadAllSessions();
+    
+    if (sessions.length === 0) {
+        vscode.window.showInformationMessage(
+            'CodeTrace: No recorded sessions found. Start recording first!'
+        );
+        return;
+    }
+
+    // Let user pick a session
+    const items = sessions.map(s => ({
+        label: new Date(s.startTime).toLocaleString(),
+        description: s.summary?.suggestedTitle || `${s.changes.length} changes, ${s.commits.length} commits`,
+        detail: s.summary ? '✨ Has AI Summary' : 'No summary yet',
+        session: s
+    }));
+
+    const selected = await vscode.window.showQuickPick(items, {
+        title: 'Select Session to Summarize',
+        placeHolder: 'Choose a session to generate AI summary'
+    });
+
+    if (!selected) {
+        return;
+    }
+
+    // Check if already has summary
+    if (selected.session.summary) {
+        const action = await vscode.window.showQuickPick(
+            ['Regenerate Summary', 'View Existing Summary', 'Cancel'],
+            { placeHolder: 'This session already has a summary' }
+        );
+        
+        if (action === 'View Existing Summary') {
+            showSummary(selected.session.summary);
+            return;
+        }
+        if (action !== 'Regenerate Summary') {
+            return;
+        }
+    }
+
+    // Show loading indicator
+    await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'CodeTrace: Generating AI Summary...',
+        cancellable: false
+    }, async (progress) => {
+        progress.report({ increment: 0, message: 'Analyzing session...' });
+
+        // Generate summary
+        const summary = await aiService.generateSessionSummary(selected.session);
+        
+        if (!summary) {
+            return;
+        }
+
+        progress.report({ increment: 50, message: 'Saving summary...' });
+
+        // Update session with summary
+        selected.session.summary = summary;
+        
+        // Save updated session
+        const saved = await saveSessionWithSummary(selected.session);
+        
+        progress.report({ increment: 100, message: 'Done!' });
+
+        if (saved) {
+            // Show the generated summary
+            showSummary(summary);
+            
+            vscode.window.showInformationMessage(
+                `CodeTrace: Summary generated! "${summary.suggestedTitle}"`
+            );
+        }
+    });
+}
+
+/**
+ * Load all sessions from .codetrace folder
+ */
+async function loadAllSessions(): Promise<SessionData[]> {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return [];
+    }
+
+    try {
+        const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
+        
+        let files: [string, vscode.FileType][];
+        try {
+            files = await vscode.workspace.fs.readDirectory(codetraceDir);
+        } catch {
+            return [];
+        }
+
+        const sessionFiles = files
+            .filter(([name, type]) => 
+                type === vscode.FileType.File && 
+                name.startsWith('session-') && 
+                name.endsWith('.json')
+            )
+            .map(([name]) => name)
+            .sort()
+            .reverse();
+
+        const sessions: SessionData[] = [];
+        const decoder = new TextDecoder();
+
+        for (const filename of sessionFiles) {
+            try {
+                const filePath = vscode.Uri.joinPath(codetraceDir, filename);
+                const data = await vscode.workspace.fs.readFile(filePath);
+                const session: SessionData = JSON.parse(decoder.decode(data));
+                sessions.push(session);
+            } catch (error) {
+                console.error(`CodeTrace: Error loading session ${filename}`, error);
+            }
+        }
+
+        return sessions;
+    } catch (error) {
+        console.error('CodeTrace: Error loading sessions', error);
+        return [];
+    }
+}
+
+/**
+ * Save session with updated summary
+ */
+async function saveSessionWithSummary(session: SessionData): Promise<boolean> {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return false;
+    }
+
+    try {
+        const codetraceDir = vscode.Uri.joinPath(workspaceRoot, '.codetrace');
+        
+        // Generate filename from session start time
+        const timestamp = session.startTime
+            .replace(/:/g, '-')
+            .replace(/\./g, '-');
+        const filename = `session-${timestamp}.json`;
+        const filePath = vscode.Uri.joinPath(codetraceDir, filename);
+
+        // Write updated session
+        const jsonContent = JSON.stringify(session, null, 2);
+        const encoder = new TextEncoder();
+        await vscode.workspace.fs.writeFile(filePath, encoder.encode(jsonContent));
+
+        return true;
+    } catch (error) {
+        console.error('CodeTrace: Error saving session with summary', error);
+        return false;
+    }
+}
+
+/**
+ * Display summary in a nice format
+ */
+function showSummary(summary: SessionSummary): void {
+    const items: vscode.QuickPickItem[] = [
+        {
+            label: '📝 ' + summary.suggestedTitle,
+            kind: vscode.QuickPickItemKind.Separator
+        } as vscode.QuickPickItem,
+        {
+            label: '$(lightbulb) What Was Built',
+            description: summary.whatWasBuilt,
+            detail: ''
+        },
+        {
+            label: '$(target) Apparent Goal',
+            description: summary.apparentGoal,
+            detail: ''
+        },
+        {
+            label: '$(file) Key Files Modified',
+            description: summary.keyFilesModified.slice(0, 5).join(', '),
+            detail: summary.keyFilesModified.length > 5 
+                ? `... and ${summary.keyFilesModified.length - 5} more`
+                : ''
+        },
+        {
+            label: '$(info) Generated',
+            description: new Date(summary.generatedAt).toLocaleString(),
+            detail: `Model: ${summary.model}`
+        }
+    ];
+
+    vscode.window.showQuickPick(items, {
+        title: `AI Summary: ${summary.suggestedTitle}`,
+        placeHolder: 'Session summary'
+    });
 }
 
 /**
